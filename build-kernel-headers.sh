@@ -5,13 +5,17 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # WSL ships no /lib/modules/$(uname -r)/build, and the running kernel is
 # Microsoft's, not the distro's -- there is no linux-headers package to install.
-# Building anything out-of-tree (kernel/dxgdrm) means fetching the matching
-# source and preparing it ourselves.
+# Building dxgdrm out-of-tree means fetching the matching source and preparing
+# it ourselves.
 #
 # Override to reuse a tree you already have:
 #   KERNEL_SRC=~/dev/WSL2-Linux-Kernel ./build-kernel-headers.sh
 KERNEL_SRC="${KERNEL_SRC:-${SCRIPT_DIR}/build/wsl-kernel}"
 
+# Nothing here needs root: the clone, the kernel build and the stamp all land
+# in KERNEL_SRC, which belongs to whoever runs this -- docker-env.sh runs the
+# container as the host user for exactly that reason. Only `make install`
+# steps outside it, into /lib/modules, and that sudo lives in the Makefile.
 KERNEL_REPO=https://github.com/microsoft/WSL2-Linux-Kernel.git
 KERNEL_RELEASE="$(uname -r)"          # 6.18.33.2-microsoft-standard-WSL2
 KERNEL_VERSION="${KERNEL_RELEASE%%-*}"  # 6.18.33.2
@@ -24,18 +28,6 @@ STAMP="${KERNEL_SRC}/.headers-ready"
 if [ -f "${STAMP}" ] && [ "$(cat "${STAMP}")" = "${KERNEL_RELEASE}" ]; then
   echo "build-kernel-headers.sh: ${KERNEL_SRC} already prepared for ${KERNEL_RELEASE}"
   exit 0
-fi
-
-missing=()
-for tool in git gcc make flex bison bc pahole rsync openssl; do
-  command -v "${tool}" >/dev/null || missing+=("${tool}")
-done
-# elfutils' libelf headers have no binary to probe for.
-[ -e /usr/include/libelf.h ] || missing+=("libelf.h")
-if [ ${#missing[@]} -ne 0 ]; then
-  echo "build-kernel-headers.sh: missing build dependencies: ${missing[*]}" >&2
-  echo "  sudo dnf install -y bc openssl-devel elfutils-libelf-devel dwarves rsync flex bison" >&2
-  exit 1
 fi
 
 if [ ! -d "${KERNEL_SRC}/.git" ]; then
@@ -62,6 +54,15 @@ fi
 # vermagic. insmod then rejects the module against a kernel built without it,
 # with no hint as to why.
 KMAKE=(make -C "${KERNEL_SRC}" LOCALVERSION= -j"$(nproc)")
+
+# The container build environment ships the vanilla gcc 13.2.0 the running
+# kernel was built with and points KGCC at it, so the MODVERSIONS CRCs come out
+# matching (see Dockerfile). Unset means a host build against the distro
+# compiler: still works, but the module then needs --force-modversion. The
+# module build has to agree with this, so Makefile keys off KGCC as well.
+if [ -n "${KGCC:-}" ]; then
+  KMAKE+=(CC="${KGCC}")
+fi
 
 # Use the config Microsoft ships in the tree, as the kernel README does. It is
 # the config that built this tag, complete down to the CC_HAS_* autodetects, so
@@ -125,13 +126,5 @@ cat <<EOF
 build-kernel-headers.sh: ${KERNEL_SRC} ready for ${KERNEL_RELEASE}
 
 Build and load the module with:
-  make -C kernel/dxgdrm load
-
-One caveat that this script cannot fix. MODVERSIONS CRCs depend on the
-compiler, and Fedora ships no gcc 13.2 to match Microsoft's build, so the
-module needs 'modprobe --force-modversion' and taints the kernel. The struct
-layouts do match -- CONFIG_RANDSTRUCT_NONE, and the config differs only in
-compiler-capability autodetects -- so this is safe, but it is not a deployment
-story. The clean fix is to boot the vmlinux just built, via kernel= in
-.wslconfig.
+  make load
 EOF

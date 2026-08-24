@@ -17,78 +17,46 @@ treat specially.
 (and silences a harmless `card0` permission-denied log from Mesa) as soon as
 the module loads.
 
-## Why this needs its own kernel build
+## Installing
 
-WSL ships no `/lib/modules/$(uname -r)/build`, and the running kernel is
-Microsoft's, not the distro's — there is no `linux-headers` package to
-install. Building this module means fetching the matching kernel source and
-preparing it far enough to produce `Module.symvers`, since `CONFIG_MODVERSIONS=y`
-means the CRCs matter.
-
-[build-kernel-headers.sh](build-kernel-headers.sh) does that: it clones the
-`microsoft/WSL2-Linux-Kernel` tag matching `uname -r`, configures it from the
-in-tree `Microsoft/config-wsl`, and builds `vmlinux` + `modules_prepare` — the
-minimum needed to build an out-of-tree module against it. The result is
-cached under `./build/wsl-kernel` and stamped with the kernel release it was
-prepared for, so it's only rebuilt after a WSL kernel update moves `uname -r`.
-
-## Building on the host
+WSL ships no `/lib/modules/$(uname -r)/build`, so building this module means
+fetching the matching kernel source first. `docker-env.sh` does the whole
+thing in a container and needs no build tooling on the host:
 
 ```sh
-./build-kernel-headers.sh   # slow the first time — this is where the CRCs come from
-make load                   # build dxgdrm.ko, install it, modprobe it
-```
-
-`make load` depends on `install`, which depends on `all`. Individually:
-
-- `make all` — build `dxgdrm.ko` against `./build/wsl-kernel`
-- `make install` — copy it to `/lib/modules/$(uname -r)/extra` and `depmod -a`
-- `make load` — `modprobe --force-modversion dxgdrm` and trigger a udev
-  re-scan so the render node appears
-- `make unload` — `rmmod dxgdrm`
-
-Host build dependencies (Fedora): `bc openssl-devel elfutils-libelf-devel
-dwarves rsync flex bison`, plus the usual `git gcc make`.
-
-### The `--force-modversion` caveat
-
-MODVERSIONS CRCs depend on the compiler, and Fedora ships no gcc 13.2 to
-match Microsoft's build, so the module needs `modprobe --force-modversion`
-and taints the kernel. The struct layouts do match — `CONFIG_RANDSTRUCT_NONE`,
-and the config differs only in compiler-capability autodetects — so this is
-safe, but it isn't a real deployment story. The clean fix is to boot the
-`vmlinux` that `build-kernel-headers.sh` just built, via `kernel=` in
-`.wslconfig`.
-
-## Building in Docker instead
-
-If you'd rather not install kernel build tooling on the host, `docker-env.sh`
-runs the same build inside a Fedora container:
-
-```sh
-./docker-env.sh              # build-kernel-headers.sh + make install, containerized
-./docker-env.sh bash         # drop into the build environment instead
-./docker-env.sh make load    # run any other target
-```
-
-It bind-mounts the repo (so `./build/wsl-kernel` persists across runs) and
-`/lib/modules` (so `make install`'s copy + `depmod -a` land in the real host
-module tree). This works because a container shares the host's kernel, so
-`uname -r` — and therefore `KERNEL_RELEASE` in `build-kernel-headers.sh` —
-is identical inside and outside the container.
-
-`make load`'s `modprobe`/`udevadm trigger` still has to run on the host: it's
-loading a module into the shared kernel, which isn't something to do from
-inside a container. Run that step manually after `./docker-env.sh` finishes:
-
-```sh
-sudo modprobe --force-modversion dxgdrm
+./docker-env.sh                 # build the kernel tree, then dxgdrm.ko
+./docker-env.sh make install    # copy into /lib/modules/$(uname -r)/extra
+sudo modprobe dxgdrm
 sudo udevadm trigger --subsystem-match=drm
 sudo udevadm settle
 ```
 
+The first run clones and builds the WSL kernel, which is slow. The result is
+cached in `./build` and reused until a WSL kernel update moves `uname -r`.
+
+The last three commands run on the host: they load the module into the kernel
+the container shares, which isn't something to do from inside it. Everything
+else, `make install` included, should go through `docker-env.sh`.
+
+Requires Docker, and `sudo` on the host for the `modprobe`/`udevadm` steps.
+
 ## Verifying
 
 ```sh
-udevadm info /dev/dri/renderD128   # DRIVERS==dxgdrm
+basename "$(readlink -f /sys/class/drm/renderD128/device/driver)"  # dxgdrm render
 ```
+
+The render node hangs off a platform device the module registers, so its
+driver symlink is what identifies it. To check the same thing the way the udev
+rules match on it:
+
+```sh
+udevadm info -a /dev/dri/renderD128 | grep DRIVERS   # DRIVERS=="dxgdrm"
+```
+
+## Further reading
+
+[BUILD-NOTES.md](BUILD-NOTES.md) — why this needs its own kernel build, why
+the compiler has to match the one the kernel was built with, what the
+container setup is doing, and whether the module can be prebuilt and shipped
+to other machines.
