@@ -1,0 +1,13 @@
+# dxgdrm's render node needs the same permissions any render node gets. The
+# stock rule in 50-udev-default.rules already does this, but stating it here
+# means the node is usable the moment the module loads rather than at the next
+# udev trigger.
+SUBSYSTEM=="drm", KERNEL=="renderD*", DRIVERS=="dxgdrm", GROUP="render", MODE="0666"
+
+# DRM core registers a primary node for every device, even a DRIVER_RENDER-only
+# one, so card0 exists with no modeset capability behind it. Mesa opens it while
+# enumerating devices and logs
+#   MESA: error: Opening /dev/dri/card0 failed: Permission denied
+# on every client start. Nothing here is privileged -- the node cannot do
+# anything -- so let it be opened and drop the noise.
+SUBSYSTEM=="drm", KERNEL=="card*", DRIVERS=="dxgdrm", GROUP="video", MODE="0666"

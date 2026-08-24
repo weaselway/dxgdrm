@@ -1,0 +1,12 @@
+# kbuild output. Note these patterns also match dotfiles: gitignore globs are
+# not shell globs, so *.o covers .module-common.o and .*.cmd covers the
+# double-dotted ..module-common.o.cmd that kbuild emits for it.
+*.o
+*.ko
+*.mod
+*.mod.c
+*.symvers
+*.order
+.*.cmd
+.tmp_versions/
+/.claude
