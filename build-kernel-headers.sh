@@ -48,21 +48,60 @@ if [ ! -d "${KERNEL_SRC}/.git" ]; then
     "${KERNEL_REPO}" "${KERNEL_SRC}"
 fi
 
+# MODVERSIONS CRCs depend on the compiler, so a module built with a different
+# one is rejected with "disagrees about version of symbol module_layout" and
+# needs modprobe --force-modversion, which taints the kernel.
+#
+# /proc/version and CONFIG_CC_VERSION_TEXT both report the running kernel was
+# built with "gcc (GCC) 13.2.0" -- bare "(GCC)", i.e. a vanilla upstream build
+# with --with-pkgversion left at its default. No distro compiler looks like
+# that: Ubuntu stamps "(Ubuntu 13.2.0-23ubuntu4)", Fedora 39 shipped 13.2.1
+# stamped "(Red Hat 13.2.1-6)". The kernel.org crosstool builds do, which is
+# why the toolchain comes from there.
+#
+# It lands in ./build next to the kernel tree -- both are build products, both
+# are gitignored, and both survive the container because that directory is
+# bind-mounted. Setting KGCC in the environment overrides all of this and skips
+# the download, for a toolchain that is already on the machine.
+KGCC_VERSION="${KGCC_VERSION:-13.2.0}"
+KGCC_DIR="${SCRIPT_DIR}/build/kgcc"
+KGCC_STAMP="${KGCC_DIR}/.version"
+
+KGCC="${KGCC_DIR}/bin/x86_64-linux-gcc"
+
+# Same shape as the kernel stamp above: the directory alone does not say
+# which version is in it, so a KGCC_VERSION bump has to invalidate it.
+if [ ! -x "${KGCC}" ] || [ "$(cat "${KGCC_STAMP}" 2>/dev/null)" != "${KGCC_VERSION}" ]; then
+    KGCC_URL="https://mirrors.edge.kernel.org/pub/tools/crosstool/files/bin/x86_64/${KGCC_VERSION}/x86_64-gcc-${KGCC_VERSION}-nolibc-x86_64-linux.tar.xz"
+
+    echo "build-kernel-headers.sh: fetching gcc ${KGCC_VERSION} from kernel.org"
+    rm -rf "${KGCC_DIR}"
+    mkdir -p "${KGCC_DIR}"
+
+    # --strip-components=2 drops the archive's gcc-13.2.0-nolibc/x86_64-linux/
+    # prefix; gcc locates its own libexec relative to the binary, so relocating
+    # the tree is fine. Running --version is the check that the layout was as
+    # expected, so a surprise fails here rather than deep in the kernel build.
+    curl -fsSL "${KGCC_URL}" | tar -xJ -C "${KGCC_DIR}" --strip-components=2
+    "${KGCC}" --version >/dev/null
+
+    echo "${KGCC_VERSION}" > "${KGCC_STAMP}"
+fi
+
 # LOCALVERSION must be set, to empty, on every invocation. Left unset,
 # scripts/setlocalversion appends "+" for a tree that is not sitting on an
 # annotated tag -- which a shallow clone is not -- and that "+" lands in
 # vermagic. insmod then rejects the module against a kernel built without it,
 # with no hint as to why.
-KMAKE=(make -C "${KERNEL_SRC}" LOCALVERSION= -j"$(nproc)")
-
-# The container build environment ships the vanilla gcc 13.2.0 the running
-# kernel was built with and points KGCC at it, so the MODVERSIONS CRCs come out
-# matching (see Dockerfile). Unset means a host build against the distro
-# compiler: still works, but the module then needs --force-modversion. The
-# module build has to agree with this, so Makefile keys off KGCC as well.
-if [ -n "${KGCC:-}" ]; then
-  KMAKE+=(CC="${KGCC}")
-fi
+#
+# Only CC comes from the fetched toolchain. Host programs (genksyms and the
+# rest of scripts/) keep using the distro gcc: this is a nolibc toolchain and
+# cannot build them anyway, and they do not feed the CRCs, which come from the
+# target compiler's preprocessor output.
+#
+# The module build has to agree with this, so the Makefile defaults KGCC to the
+# same path.
+KMAKE=(make -C "${KERNEL_SRC}" LOCALVERSION= -j"$(nproc)" CC="${KGCC}")
 
 # Use the config Microsoft ships in the tree, as the kernel README does. It is
 # the config that built this tag, complete down to the CC_HAS_* autodetects, so

@@ -35,19 +35,32 @@ Fedora 39 shipped 13.2.1 stamped `(Red Hat 13.2.1-6)`, Ubuntu stamps
 `(Ubuntu 13.2.0-23ubuntu4)`, and no Fedora ever shipped 13.2.0 at all. The
 kernel.org crosstool builds do, so that's where the toolchain comes from.
 
-[Dockerfile](Dockerfile) fetches it and exports it as `KGCC`, which both
-`build-kernel-headers.sh` and the [Makefile](Makefile) pass as `CC` — so
-`vmlinux` and the module are built with the kernel's own toolchain. Both have
-to agree: the module is checked against the CRCs in the `Module.symvers` that
-the `vmlinux` build produced.
+[build-kernel-headers.sh](build-kernel-headers.sh) fetches it into
+`./build/kgcc` and passes it as `CC`, and the [Makefile](Makefile) defaults
+`KGCC` to that same path — so `vmlinux` and the module are built with the
+kernel's own toolchain. Both have to agree: the module is checked against the
+CRCs in the `Module.symvers` that the `vmlinux` build produced, so having one
+place decide which compiler that is, rather than an image `ENV` on one side and
+a default on the other, is the point.
+
+It sits under `./build` next to the kernel tree because it is the same kind of
+thing: a cached build input, gitignored, bind-mounted so it outlives the
+container, and re-fetched when the version stamp beside it stops matching.
 
 Only `CC` comes from that toolchain. Host programs (`genksyms` and the rest of
-`scripts/`) keep using Fedora's gcc — it's a `nolibc` toolchain and can't build
-them anyway, and they don't feed the CRCs, which come from the target
-compiler's preprocessor output.
+`scripts/`) keep using the container distro's gcc — it's a `nolibc` toolchain
+and can't build them anyway, and they don't feed the CRCs, which come from the
+target compiler's preprocessor output.
+
+This is also why the container's distro is not load-bearing. It was Fedora and
+is now Ubuntu 26.04, matching the other build containers in this repo; since
+the compiler that determines the CRCs comes from kernel.org either way, the
+module is unaffected.
 
 This reproduces the CRCs exactly, confirmed by loading the module without
-`--force-modversion`. A host build has no such luck and needs the flag.
+`--force-modversion`. A build that falls back to the distro compiler — i.e. one
+where `./build/kgcc` isn't there or won't run — has no such luck and needs the
+flag.
 
 The other way out, independent of all this, is to boot the `vmlinux` that
 `build-kernel-headers.sh` just built, via `kernel=` in `.wslconfig`.
@@ -68,14 +81,17 @@ the image tag carrying the uid. That account has passwordless `sudo`, granted
 by uid rather than by name, for the `/lib/modules` writes in `make install`.
 Nothing else in the build needs root.
 
-`docker-env.sh` deliberately stops after building. Run `make install` through
-it rather than on the host: `install` depends on `all`, and on the host `KGCC`
-is unset, so kbuild would rebuild the module with the distro compiler and throw
-away the CRC match.
+`docker-env.sh` deliberately stops after building. Running `make install`
+through it is still the reliable path: `install` depends on `all`, so it can
+rebuild the module, and that rebuild has to use the same gcc 13.2.0. The
+Makefile defaults `KGCC` to `./build/kgcc`, so a host `make install` does pick
+up the right compiler — but only if that toolchain runs on the host, which is
+one more thing to be right about for no gain.
 
-For the same reason `MODPROBE_FLAGS` in the Makefile can't key off `KGCC` —
-`modprobe` runs on the host, where `KGCC` is unset no matter which compiler
-built the module.
+`MODPROBE_FLAGS` can't be derived from `KGCC`, even though it looks like it
+should be: `KGCC` describes the invocation it is read in, while whether to force
+depends on what compiled the `.ko` already sitting on disk — and `make load`
+need not be the invocation that built it.
 
 ## Can the module be prebuilt and shipped?
 

@@ -1,45 +1,32 @@
-# Fedora build environment for dxgdrm, matching what build-kernel-headers.sh
-# expects on the host (see its dependency check), plus the exact compiler the
+# Ubuntu build environment for dxgdrm, matching the rest of this repo's build
+# containers (see setup/ubuntu/resolute/Dockerfile), plus the exact compiler the
 # running kernel was built with -- which no distro packages. See below.
-FROM fedora:44
+FROM ubuntu:26.04
 
-RUN dnf install -y \
+# The kernel's own build dependencies, plus curl for the toolchain fetch below.
+# Two of these are named differently than one might expect on Ubuntu:
+#   pahole      generates the BTF the config asks for; Fedora splits this into
+#               pahole and dwarves, Ubuntu ships one package under either name.
+#   passwd      provides groupadd/useradd for the account block further down.
+#               It is in the base image today; listing it keeps that from being
+#               a silent assumption.
+# libssl-dev and libelf-dev are openssl-devel and elfutils-libelf-devel.
+RUN apt -y update \
+ && apt -y install \
         git gcc make flex bison bc pahole rsync diffutils \
-        openssl openssl-devel elfutils-libelf-devel dwarves \
-        sudo kmod shadow-utils tar xz \
-    && dnf clean all
+        openssl libssl-dev libelf-dev \
+        sudo kmod passwd tar xz-utils \
+        curl ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
 
-# MODVERSIONS CRCs depend on the compiler, so a module built with a different
-# one is rejected with "disagrees about version of symbol module_layout" and
-# needs modprobe --force-modversion, which taints the kernel.
+# Note what is NOT here: the gcc 13.2.0 the running kernel was built with, and
+# which the MODVERSIONS CRCs depend on. build-kernel-headers.sh fetches that
+# itself, into the bind-mounted ./build alongside the kernel tree, so the two
+# things that have to agree on a compiler are decided in one place and a host
+# build gets the same toolchain as a container build. See the comment there.
 #
-# /proc/version and CONFIG_CC_VERSION_TEXT both report the running kernel was
-# built with "gcc (GCC) 13.2.0" -- bare "(GCC)", i.e. a vanilla upstream build
-# with --with-pkgversion left at its default. No distro compiler looks like
-# that: Fedora 39 shipped 13.2.1 stamped "(Red Hat 13.2.1-6)", Ubuntu stamps
-# "(Ubuntu 13.2.0-23ubuntu4)", and no Fedora ever shipped 13.2.0 at all. The
-# kernel.org crosstool builds do, which is why the toolchain comes from there.
-#
-# Only CC comes from this toolchain. Host programs (genksyms and the rest of
-# scripts/) keep using Fedora's gcc: this is a nolibc toolchain and cannot
-# build them anyway, and they do not feed the CRCs, which come from the target
-# compiler's preprocessor output.
-#
-# Placed before the ARG UID block on purpose -- an ARG invalidates every layer
-# after it, and this download should not be repeated for each uid.
-ARG KGCC_URL=https://mirrors.edge.kernel.org/pub/tools/crosstool/files/bin/x86_64/13.2.0/x86_64-gcc-13.2.0-nolibc-x86_64-linux.tar.xz
-ENV KGCC=/opt/kgcc/bin/x86_64-linux-gcc
-
-# curl is not in the dnf list above: the base image already has curl-minimal,
-# which provides the binary, and asking for curl proper conflicts with it.
-#
-# --strip-components=2 drops the archive's gcc-13.2.0-nolibc/x86_64-linux/
-# prefix; gcc locates its own libexec relative to the binary, so relocating the
-# tree is fine. Running --version is the check that the layout was as expected:
-# if it was not, the image build fails here rather than the kernel build later.
-RUN mkdir -p /opt/kgcc \
-    && curl -fsSL "${KGCC_URL}" | tar -xJ -C /opt/kgcc --strip-components=2 \
-    && "${KGCC}" --version
+# That is also why curl, ca-certificates and xz-utils are in the list above:
+# they are needed at run time by that script rather than at image build time.
 
 # The build writes into the bind-mounted repo, so it has to run as the host
 # user or the tree comes back owned by root. That means baking a matching
@@ -48,7 +35,8 @@ RUN mkdir -p /opt/kgcc \
 # only if an entry with that uid exists.
 #
 # -o on both, because the ids are the host's and may already be taken in the
-# base image.
+# base image -- ubuntu:26.04 ships an "ubuntu" account at uid 1000, so the
+# common case collides.
 #
 # Passwordless sudo because `make install` writes into the bind-mounted
 # /lib/modules and runs depmod -- the one step that still needs root now that
@@ -70,3 +58,8 @@ RUN mkdir -p /work && chown "${UID}:${GID}" /work
 
 USER ${UID}:${GID}
 WORKDIR /work
+
+# Deliberately no ENTRYPOINT, unlike setup/ubuntu/resolute/Dockerfile. That one
+# uses `env bash` so its docker-env.sh can pass `-c '...'`; here docker-env.sh
+# execs its arguments directly, which is what makes `./docker-env.sh make
+# install` work. An entrypoint of bash would turn that into `bash make install`.

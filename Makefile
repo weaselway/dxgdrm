@@ -13,8 +13,14 @@ KBUILD_ARGS := LOCALVERSION=
 
 # Build with the same compiler build-kernel-headers.sh used for vmlinux, or the
 # CRCs in Module.symvers will not be the ones this module is checked against.
-# The container environment exports KGCC (see Dockerfile); unset means a host
-# build with the distro compiler, and the caveat on `install` below applies.
+# That script installs it here, so default to it and stay in step without the
+# caller having to arrange anything; KGCC= in the environment still wins.
+#
+# Empty if the script has not run yet, which falls back to the distro compiler
+# and the caveat on `install` below. There is no point erroring on it: without
+# that script there is no prepared KDIR to build against either.
+KGCC ?= $(wildcard $(CURDIR)/build/kgcc/bin/x86_64-linux-gcc)
+
 ifneq ($(KGCC),)
 KBUILD_ARGS += CC=$(KGCC)
 endif
@@ -27,18 +33,22 @@ all:
 clean:
 	$(MAKE) -C $(KDIR) M=$(CURDIR) $(KBUILD_ARGS) clean
 
-# Empty by default because a container build loads clean: it uses the vanilla
-# gcc 13.2.0 the running kernel was built with (KGCC, see Dockerfile), which
-# reproduces the MODVERSIONS CRCs exactly -- verified by loading unforced.
+# Empty by default because a build with KGCC set loads clean: it uses the
+# vanilla gcc 13.2.0 the running kernel was built with (see
+# build-kernel-headers.sh, which installs it), reproducing the MODVERSIONS CRCs
+# exactly -- verified by loading unforced.
 #
-# A host build with the distro compiler gets different CRCs, and insmod rejects
-# it with "disagrees about version of symbol module_layout". The struct layouts
-# do match (CONFIG_RANDSTRUCT_NONE, and the config is otherwise identical to
-# /proc/config.gz), so forcing is safe there -- it just taints the kernel:
+# A build that fell back to the distro compiler gets different CRCs, and insmod
+# rejects it with "disagrees about version of symbol module_layout". The struct
+# layouts do match (CONFIG_RANDSTRUCT_NONE, and the config is otherwise
+# identical to /proc/config.gz), so forcing is safe there -- it just taints the
+# kernel:
 #   make load MODPROBE_FLAGS=--force-modversion
 #
-# Note this cannot key off KGCC: modprobe runs on the host, where KGCC is unset
-# regardless of what built the module.
+# Note this cannot be derived from KGCC even though it looks like it should be.
+# KGCC describes this invocation, while forcing depends on what compiled the
+# .ko that is already on disk -- and `load` may well not be the invocation that
+# built it.
 MODPROBE_FLAGS ?=
 
 install: all
