@@ -55,10 +55,10 @@ should go through `docker-env.sh`.
 Requires Docker, and `sudo` on the host for the `modprobe`/`udevadm` steps.
 
 Deploying this properly — a copy somewhere persistent, loaded once per boot
-from a systemd unit — is [weaselway/setup]'s job. This repo builds it and
+from a systemd unit — is [weaselway/weaselway]'s job. This repo builds it and
 gets it loaded for a look.
 
-[weaselway/setup]: https://github.com/weaselway/setup
+[weaselway/weaselway]: https://github.com/weaselway/weaselway
 
 ## Verifying
 

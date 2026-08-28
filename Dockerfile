@@ -1,6 +1,7 @@
-# Ubuntu build environment for dxgdrm, matching the rest of this repo's build
-# containers (see setup/ubuntu/resolute/Dockerfile), plus the exact compiler the
-# running kernel was built with -- which no distro packages. See below.
+# Ubuntu build environment for dxgdrm, matching the project's other build
+# containers (see ubuntu/resolute/Dockerfile in the weaselway repo), plus the
+# exact compiler the running kernel was built with -- which no distro packages.
+# See below.
 FROM ubuntu:26.04
 
 # The kernel's own build dependencies, plus curl for the toolchain fetch below.
@@ -48,7 +49,8 @@ RUN mkdir -p /work && chown "${UID}:${GID}" /work
 USER ${UID}:${GID}
 WORKDIR /work
 
-# Deliberately no ENTRYPOINT, unlike setup/ubuntu/resolute/Dockerfile. That one
-# uses `env bash` so its docker-env.sh can pass `-c '...'`; here docker-env.sh
-# execs its arguments directly, which is what makes `./docker-env.sh make all`
-# work. An entrypoint of bash would turn that into `bash make all`.
+# Deliberately no ENTRYPOINT, unlike the weaselway repo's resolute Dockerfile.
+# That one uses `env bash` so its docker-env.sh can pass `-c '...'`; here
+# docker-env.sh execs its arguments directly, which is what makes
+# `./docker-env.sh make all` work. An entrypoint of bash would turn that into
+# `bash make all`.

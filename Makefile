@@ -45,7 +45,7 @@ MODPROBE_FLAGS ?=
 # depmod index pointing at it -- is thrown away at the next `wsl --shutdown`.
 # Load it out of this directory instead. The ./ is load-bearing: modprobe only
 # treats its argument as a file if it contains a slash. Deploying it for real,
-# from somewhere persistent at every boot, is the setup repo's job.
+# from somewhere persistent at every boot, is the weaselway repo's job.
 load: all
 	sudo modprobe $(MODPROBE_FLAGS) ./dxgdrm.ko
 	sudo udevadm trigger --subsystem-match=drm

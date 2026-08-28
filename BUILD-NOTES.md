@@ -136,6 +136,6 @@ until the reboot.
 So `modprobe dxgdrm` by name cannot be the deployment story: the one directory
 it searches is the one that does not keep anything. `modprobe` given a path
 containing a slash loads that file directly instead, which is what both the
-`load` target here and the setup repo's `prep-session.sh` do. It skips
+`load` target here and the weaselway repo's `prep-session.sh` do. It skips
 `modules.dep`, which costs nothing — `dxgdrm` links only against DRM core, and
 `CONFIG_DRM=y`.
