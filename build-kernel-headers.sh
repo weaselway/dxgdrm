@@ -14,8 +14,8 @@ KERNEL_SRC="${KERNEL_SRC:-${SCRIPT_DIR}/build/wsl-kernel}"
 
 # Nothing here needs root: the clone, the kernel build and the stamp all land
 # in KERNEL_SRC, which belongs to whoever runs this -- docker-env.sh runs the
-# container as the host user for exactly that reason. Only `make install`
-# steps outside it, into /lib/modules, and that sudo lives in the Makefile.
+# container as the host user for exactly that reason. Only `make load` needs
+# root, to talk to the kernel, and that sudo lives in the Makefile.
 KERNEL_REPO=https://github.com/microsoft/WSL2-Linux-Kernel.git
 KERNEL_RELEASE="$(uname -r)"          # 6.18.33.2-microsoft-standard-WSL2
 KERNEL_VERSION="${KERNEL_RELEASE%%-*}"  # 6.18.33.2
@@ -159,11 +159,3 @@ if [ "${built_release}" != "${KERNEL_RELEASE}" ]; then
 fi
 
 echo "${KERNEL_RELEASE}" > "${STAMP}"
-
-cat <<EOF
-
-build-kernel-headers.sh: ${KERNEL_SRC} ready for ${KERNEL_RELEASE}
-
-Build and load the module with:
-  make load
-EOF

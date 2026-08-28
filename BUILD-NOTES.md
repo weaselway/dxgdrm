@@ -67,26 +67,27 @@ The other way out, independent of all this, is to boot the `vmlinux` that
 
 ## What the container setup is doing
 
-It bind-mounts the repo (so `./build/wsl-kernel` persists across runs) and
-`/lib/modules` (so `make install`'s copy + `depmod -a` land in the real host
-module tree). That works because a container shares the host's kernel, so
-`uname -r` — and therefore `KERNEL_RELEASE` in `build-kernel-headers.sh` — is
-identical inside and outside it.
+It bind-mounts the repo, so `./build/wsl-kernel` persists across runs, and
+nothing else — the build needs no root and writes nowhere else. What the
+container does need from the host is its kernel, which it shares: `uname -r`,
+and therefore `KERNEL_RELEASE` in `build-kernel-headers.sh`, is identical
+inside and outside it, so what comes out is a module for the running kernel.
 
 The container runs as `$(id -u):$(id -g)` so the kernel tree and `dxgdrm.ko`
 come back owned by you rather than by root. The image has to be built for those
 ids too, since `docker run --user <uid>` only resolves `HOME` and a shell if a
 matching `/etc/passwd` entry exists — hence `--build-arg UID`/`GID`, and hence
-the image tag carrying the uid. That account has passwordless `sudo`, granted
-by uid rather than by name, for the `/lib/modules` writes in `make install`.
-Nothing else in the build needs root.
+the image tag carrying the uid. That account has passwordless `sudo` granted by
+uid rather than by name, but only as a convenience in `./docker-env.sh bash`;
+no build step uses it.
 
-`docker-env.sh` deliberately stops after building. Running `make install`
-through it is still the reliable path: `install` depends on `all`, so it can
-rebuild the module, and that rebuild has to use the same gcc 13.2.0. The
-Makefile defaults `KGCC` to `./build/kgcc`, so a host `make install` does pick
-up the right compiler — but only if that toolchain runs on the host, which is
-one more thing to be right about for no gain.
+`docker-env.sh` deliberately stops after building, because the remaining step
+is a `modprobe` and that has to run on the host — it loads into the kernel the
+container is only borrowing. Rebuilding, on the other hand, should go back
+through the container: it has to use the same gcc 13.2.0. The Makefile defaults
+`KGCC` to `./build/kgcc`, so a host `make` does pick up the right compiler —
+but only if that toolchain runs on the host, which is one more thing to be
+right about for no gain.
 
 `MODPROBE_FLAGS` can't be derived from `KGCC`, even though it looks like it
 should be: `KGCC` describes the invocation it is read in, while whether to force
@@ -97,17 +98,44 @@ need not be the invocation that built it.
 
 Yes. Everyone on a given WSL release runs the identical Microsoft-built kernel,
 so vermagic (`UTS_RELEASE` plus a few config flags) and the struct layouts are
-the same everywhere, and a container build's CRCs match. Copy `dxgdrm.ko` into
-`/lib/modules/$(uname -r)/extra`, run `depmod -a`, and ship `99-dxgdrm.rules`
-alongside it.
+the same everywhere, and a container build's CRCs match. Put `dxgdrm.ko`
+somewhere on the distro's own disk, `modprobe` it by that path once per boot,
+and ship `99-dxgdrm.rules` alongside it.
+
+Not `/lib/modules/$(uname -r)/extra` + `depmod -a`, which is the obvious answer
+and the wrong one — see below.
 
 Caveats:
 
 - `uname -r` has to match exactly. A WSL kernel update moves the release string
   and the module is rejected, so a prebuilt artifact needs a rebuild per
-  servicing release.
+  servicing release. Worth keying the path it is stored at on `uname -r`, so a
+  stale one is a missing file rather than a vermagic error.
 - x86_64 and arm64 need separate builds.
 - A custom kernel via `kernel=` in `.wslconfig` is a different config and
   release, so it voids this.
-- `/lib/modules` is per-distro-instance even though the kernel is shared across
-  every distro on one Windows host, so each installed distro needs its own copy.
+
+## Why not /lib/modules
+
+WSL mounts `/usr/lib/modules/$(uname -r)` itself, at boot, as an overlay:
+
+```
+none on /usr/lib/modules/6.18.33.2-microsoft-standard-WSL2 type overlay
+  (lowerdir=/modules,
+   upperdir=/lib/modules/6.18.33.2-microsoft-standard-WSL2/rw/upper,
+   workdir=/lib/modules/6.18.33.2-microsoft-standard-WSL2/rw/work)
+```
+
+`lowerdir=/modules` is WSL's own module image, and neither it nor the `rw`
+directory the upper and work layers name is reachable from inside the distro —
+they exist in WSL's init mount namespace. A write into `.../extra` therefore
+lands in a layer that is discarded at the next `wsl --shutdown`, taking the
+`depmod` index that pointed at it along too. It looks like it worked, right up
+until the reboot.
+
+So `modprobe dxgdrm` by name cannot be the deployment story: the one directory
+it searches is the one that does not keep anything. `modprobe` given a path
+containing a slash loads that file directly instead, which is what both the
+`load` target here and the setup repo's `prep-session.sh` do. It skips
+`modules.dep`, which costs nothing — `dxgdrm` links only against DRM core, and
+`CONFIG_DRM=y`.

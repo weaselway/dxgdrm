@@ -2,25 +2,19 @@
 set -euo pipefail
 
 # Builds the WSL kernel headers and dxgdrm.ko inside an Ubuntu container. It
-# stops there: installing the module is a separate, explicit step.
+# stops there: loading the module is a separate, explicit step, and one that
+# has to happen on the host -- it loads into the kernel the container shares.
 #
 # The kernel source/build tree (build-kernel-headers.sh's KERNEL_SRC) lands in
-# ./build, which is bind-mounted so it survives the container and is reused
-# on the next run. /lib/modules is bind-mounted too, for `make install`: it
-# writes into /lib/modules/$(uname -r)/extra and runs depmod -- and since
-# containers share the host's kernel, uname -r inside the container matches
-# the host, so that write lands in the right place.
-#
-# Running `make install` through here is the reliable path. It depends on `all`,
-# so it can rebuild the module, and rebuilding has to use the gcc 13.2.0 that
-# produced the CRCs. The Makefile does default KGCC to the copy
-# build-kernel-headers.sh installed under ./build, so a host `make install`
-# picks up the same compiler -- but only if that toolchain runs on the host,
-# which is one more thing to be right about for no gain.
+# ./build, which is bind-mounted so it survives the container and is reused on
+# the next run. Nothing else is mounted: the build needs no root and writes
+# nothing outside this directory. That the container shares the host's kernel
+# still matters, though -- it is what makes uname -r, and therefore
+# KERNEL_RELEASE in build-kernel-headers.sh, the release we are building for.
 #
 # Usage:
 #   ./docker-env.sh                 # build headers + dxgdrm.ko
-#   ./docker-env.sh make install    # then install it into /lib/modules
+#   ./docker-env.sh make clean      # or any other make target
 #   ./docker-env.sh bash            # interactive shell in the build environment
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -45,7 +39,6 @@ docker build \
 DOCKER_RUN=(docker run --rm -it
   --user "${HOST_UID}:${HOST_GID}"
   -v "${SCRIPT_DIR}:${CONTAINER_WORKDIR}"
-  -v /lib/modules:/lib/modules
   -w "${CONTAINER_WORKDIR}"
   "${IMAGE}")
 
@@ -57,14 +50,14 @@ fi
 
 cat <<'EOF'
 
-docker-env.sh: dxgdrm.ko built. Install and load it with:
+docker-env.sh: dxgdrm.ko built. Load it with:
 
-  ./docker-env.sh make install
-  sudo modprobe dxgdrm
+  sudo modprobe ./dxgdrm.ko
   sudo udevadm trigger --subsystem-match=drm
   sudo udevadm settle
 
-modprobe has to run on the host -- it loads into the shared kernel. No
---force-modversion: the container's gcc 13.2.0 reproduces the kernel's CRCs,
-so the module loads unforced and does not taint.
+The module is loaded out of this directory rather than installed first: on WSL
+/lib/modules is an overlay that WSL itself mounts, and anything written there
+is gone at the next `wsl --shutdown`. See the comment in the Makefile.
+
 EOF
