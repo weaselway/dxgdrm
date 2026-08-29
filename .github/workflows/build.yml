@@ -1,0 +1,95 @@
+# Builds dxgdrm.ko for the WSL2 kernels captured in ./conf.
+#
+# The runner is not WSL, so `uname -r` is useless here and the config cannot
+# come from the running kernel -- each conf/kernel-<release>.conf names the
+# release it was captured from, and build-kernel-headers.sh takes both from it
+# via KERNEL_CONFIG. Adding a config to ./conf adds a matrix leg; nothing here
+# hardcodes a kernel version.
+name: build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # The matrix has to exist before the job that uses it, and `ls conf` is not
+  # something a matrix expression can do -- hence this.
+  configs:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.list.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: list
+        run: |
+          matrix="$(ls conf/kernel-*.conf | jq -Rrc '[., inputs] | {config: .}')"
+          echo "matrix=${matrix}" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: configs
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.configs.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Derive the target release from the config name
+        id: kernel
+        run: |
+          release="$(basename '${{ matrix.config }}' .conf)"
+          release="${release#kernel-}"
+          echo "release=${release}" >> "$GITHUB_OUTPUT"
+
+      # Preparing the tree means building vmlinux, which is the slow part by a
+      # wide margin -- the CRCs in Module.symvers come from it, so it cannot be
+      # skipped, only cached. build-kernel-headers.sh keys its own .headers-ready
+      # stamp on the release; the cache key adds the config, since a config edit
+      # invalidates a tree the stamp would still accept.
+      #
+      # The kgcc toolchain is cached separately: it is small, and it is keyed on
+      # a version rather than on a kernel, so every leg shares one copy.
+      - name: Cache the prepared kernel tree
+        uses: actions/cache@v4
+        with:
+          path: build/wsl-kernel
+          key: wsl-kernel-${{ steps.kernel.outputs.release }}-${{ hashFiles(matrix.config) }}
+
+      - name: Cache the kernel.org toolchain
+        uses: actions/cache@v4
+        with:
+          path: build/kgcc
+          key: kgcc-${{ hashFiles('build-kernel-headers.sh') }}
+
+      # The same entry point a developer uses, so CI cannot drift into building
+      # in an environment nobody else has: docker-env.sh builds the image from
+      # the repo's Dockerfile, then runs build-kernel-headers.sh and `make all`
+      # inside it as the invoking user -- which is why the bind-mounted ./build
+      # comes back readable by the cache step above.
+      #
+      # The kernel it shares is the runner's and not the target, but nothing
+      # here consults it: KERNEL_CONFIG names the kernel instead of uname -r.
+      - name: Build dxgdrm.ko
+        env:
+          KERNEL_CONFIG: ${{ matrix.config }}
+        run: ./docker-env.sh
+
+      # modinfo is the check that the module is for the kernel intended, rather
+      # than for whatever tree happened to be cached: vermagic has to be the
+      # release the config was captured from, with no "+" from setlocalversion.
+      - name: Verify vermagic
+        run: |
+          modinfo dxgdrm.ko
+          vermagic="$(modinfo -F vermagic dxgdrm.ko | cut -d' ' -f1)"
+          expected='${{ steps.kernel.outputs.release }}'
+          if [ "${vermagic}" != "${expected}" ]; then
+            echo "vermagic is '${vermagic}', expected '${expected}'" >&2
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dxgdrm-${{ steps.kernel.outputs.release }}
+          path: dxgdrm.ko
+          if-no-files-found: error

@@ -17,7 +17,40 @@ KERNEL_SRC="${KERNEL_SRC:-${SCRIPT_DIR}/build/wsl-kernel}"
 # container as the host user for exactly that reason. Only `make load` needs
 # root, to talk to the kernel, and that sudo lives in the Makefile.
 KERNEL_REPO=https://github.com/microsoft/WSL2-Linux-Kernel.git
-KERNEL_RELEASE="$(uname -r)"          # 6.18.33.2-microsoft-standard-WSL2
+
+# Which kernel to build against. On WSL that is the running one, and its config
+# comes from the source tree. Off WSL -- CI, or any machine not running the
+# target kernel -- uname -r says nothing useful, so point KERNEL_CONFIG at one
+# of the captured configs in ./conf instead:
+#
+#   KERNEL_CONFIG=conf/kernel-6.18.33.2-microsoft-standard-WSL2.conf \
+#     ./build-kernel-headers.sh
+#
+# Those are named for the release they were captured from, which is where the
+# release then comes from -- the config file itself does not carry it (the
+# version is the tree's, the "-microsoft-standard-WSL2" suffix is
+# CONFIG_LOCALVERSION, and nothing states the pair). Deriving it from the name
+# is not taken on trust: the built tree's kernel.release is checked against it
+# at the end, which is the same check the WSL path relies on.
+KERNEL_CONFIG="${KERNEL_CONFIG:-}"
+
+if [ -n "${KERNEL_CONFIG}" ]; then
+  config_base="$(basename "${KERNEL_CONFIG}")"
+  case "${config_base}" in
+    kernel-*.conf) ;;
+    *)
+      echo "build-kernel-headers.sh: KERNEL_CONFIG must be named" >&2
+      echo "  kernel-<release>.conf, not '${config_base}'" >&2
+      exit 1
+      ;;
+  esac
+  config_release="${config_base#kernel-}"
+  config_release="${config_release%.conf}"
+  KERNEL_RELEASE="${KERNEL_RELEASE:-${config_release}}"
+else
+  KERNEL_RELEASE="${KERNEL_RELEASE:-$(uname -r)}"  # 6.18.33.2-microsoft-standard-WSL2
+fi
+
 KERNEL_VERSION="${KERNEL_RELEASE%%-*}"  # 6.18.33.2
 KERNEL_TAG="linux-msft-wsl-${KERNEL_VERSION}"
 
@@ -36,7 +69,7 @@ if [ ! -d "${KERNEL_SRC}/.git" ]; then
   # it is missing the kernel is newer than the published tags.
   if ! git ls-remote --tags --exit-code "${KERNEL_REPO}" "refs/tags/${KERNEL_TAG}" >/dev/null 2>&1; then
     echo "build-kernel-headers.sh: no tag ${KERNEL_TAG} in ${KERNEL_REPO}" >&2
-    echo "  running kernel is ${KERNEL_RELEASE}; published tags near it:" >&2
+    echo "  target kernel is ${KERNEL_RELEASE}; published tags near it:" >&2
     git ls-remote --tags "${KERNEL_REPO}" 2>/dev/null \
       | grep -oE 'linux-msft-wsl-[0-9.]+' | sort -uV | tail -5 | sed 's/^/    /' >&2
     exit 1
@@ -117,13 +150,17 @@ KMAKE=(make -C "${KERNEL_SRC}" LOCALVERSION= -j"$(nproc)" CC="${KGCC}")
 # resulting module outright --
 #   .gnu.linkonce.this_module section size must match the kernel's built
 #   struct module size at run time
-KCONFIG_SRC="${KERNEL_SRC}/Microsoft/config-wsl"
+#
+# KERNEL_CONFIG overrides the source of the config, not any of the above: a
+# captured config is a copy of what the target kernel was actually configured
+# with, so the same reasoning applies to it unchanged.
+KCONFIG_SRC="${KERNEL_CONFIG:-${KERNEL_SRC}/Microsoft/config-wsl}"
 if [ ! -r "${KCONFIG_SRC}" ]; then
   echo "build-kernel-headers.sh: ${KCONFIG_SRC} is missing" >&2
   exit 1
 fi
 
-echo "build-kernel-headers.sh: configuring from Microsoft/config-wsl"
+echo "build-kernel-headers.sh: configuring from ${KCONFIG_SRC}"
 cp "${KCONFIG_SRC}" "${KERNEL_SRC}/.config"
 
 # The in-tree config is not regenerated for every servicing release -- at
@@ -132,7 +169,11 @@ cp "${KCONFIG_SRC}" "${KERNEL_SRC}/.config"
 # checking rather than assuming, because the failure it would cause (a module
 # built against the wrong struct layouts) is opaque. Only advisory: booting a
 # custom kernel is a legitimate reason to differ.
-if [ -r /proc/config.gz ]; then
+#
+# Only when the target is the kernel we are running on. Building for another
+# release -- the KERNEL_CONFIG case -- makes the two configs unrelated, and the
+# difference expected rather than a warning.
+if [ "${KERNEL_RELEASE}" = "$(uname -r)" ] && [ -r /proc/config.gz ]; then
   if ! diff -q <(zcat /proc/config.gz | grep -E '^(CONFIG_|# CONFIG_)' | sort) \
                 <(grep -E '^(CONFIG_|# CONFIG_)' "${KCONFIG_SRC}" | sort) >/dev/null; then
     echo "build-kernel-headers.sh: WARNING: the running kernel's config differs from" >&2
@@ -154,7 +195,7 @@ echo "build-kernel-headers.sh: preparing module build support"
 built_release="$(cat "${KERNEL_SRC}/include/config/kernel.release")"
 if [ "${built_release}" != "${KERNEL_RELEASE}" ]; then
   echo "build-kernel-headers.sh: prepared tree reports '${built_release}'," >&2
-  echo "  but the running kernel is '${KERNEL_RELEASE}' -- vermagic will not match." >&2
+  echo "  but the target kernel is '${KERNEL_RELEASE}' -- vermagic will not match." >&2
   exit 1
 fi
 

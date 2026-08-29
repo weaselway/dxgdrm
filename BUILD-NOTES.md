@@ -19,6 +19,33 @@ minimum needed to build an out-of-tree module against it. The result is cached
 under `./build/wsl-kernel` and stamped with the kernel release it was prepared
 for, so it's only rebuilt after a WSL kernel update moves `uname -r`.
 
+## Building somewhere that isn't WSL
+
+`uname -r` is how the build finds its kernel, and on anything but WSL it points
+at the wrong one — CI runners included. The configs in [conf/](conf) exist for
+that case: each is a copy of the config a target kernel was built with, named
+for that kernel's release, and `KERNEL_CONFIG` makes
+[build-kernel-headers.sh](build-kernel-headers.sh) take both from it instead of
+from the machine it is running on.
+
+```
+KERNEL_CONFIG=conf/kernel-6.18.33.2-microsoft-standard-WSL2.conf \
+  ./build-kernel-headers.sh && make all
+```
+
+The release has to come from the filename because the config does not state it:
+the version in it is the tree's and the `-microsoft-standard-WSL2` suffix is
+`CONFIG_LOCALVERSION`, but nothing pairs them. That guess is checked rather than
+trusted — the prepared tree's `include/config/kernel.release` has to match, the
+same check the WSL path already made.
+
+The GitHub Actions workflow ([.github/workflows/build.yml](.github/workflows/build.yml))
+runs exactly that, through [docker-env.sh](docker-env.sh) rather than directly,
+once per config in `conf/` — so adding a config there adds a build, and CI
+builds in the same container everyone else does. It caches the prepared kernel tree — `vmlinux` is most of the wall clock
+— keyed on the release *and* the config's hash, since editing a config leaves
+the script's own `.headers-ready` stamp still looking valid.
+
 ## Matching the kernel's compiler
 
 MODVERSIONS CRCs depend on the compiler, so a module built with the wrong one

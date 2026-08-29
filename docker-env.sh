@@ -36,11 +36,29 @@ docker build \
   --build-arg GID="${HOST_GID}" \
   -t "${IMAGE}" "${SCRIPT_DIR}"
 
-DOCKER_RUN=(docker run --rm -it
+DOCKER_RUN=(docker run --rm
   --user "${HOST_UID}:${HOST_GID}"
   -v "${SCRIPT_DIR}:${CONTAINER_WORKDIR}"
-  -w "${CONTAINER_WORKDIR}"
-  "${IMAGE}")
+  -w "${CONTAINER_WORKDIR}")
+
+# -it is for `./docker-env.sh bash` at a terminal; docker refuses -t outright
+# when there is no tty, which is every CI run and any `| tee`.
+if [ -t 0 ] && [ -t 1 ]; then
+  DOCKER_RUN+=(-it)
+fi
+
+# build-kernel-headers.sh reads the environment for what it cannot work out
+# itself, and inside the container it can work out less: KERNEL_CONFIG is how a
+# machine that is not running the target kernel names it, which is the CI case.
+# Forwarded only when set, so an unset variable stays unset rather than becoming
+# an empty one -- the script distinguishes those.
+for var in KERNEL_CONFIG KERNEL_RELEASE KGCC_VERSION; do
+  if [ -n "${!var:-}" ]; then
+    DOCKER_RUN+=(-e "${var}=${!var}")
+  fi
+done
+
+DOCKER_RUN+=("${IMAGE}")
 
 if [ $# -gt 0 ]; then
   exec "${DOCKER_RUN[@]}" "$@"
