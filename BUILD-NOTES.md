@@ -89,10 +89,12 @@ through the container: it has to use the same gcc 13.2.0. The Makefile defaults
 but only if that toolchain runs on the host, which is one more thing to be
 right about for no gain.
 
-`MODPROBE_FLAGS` can't be derived from `KGCC`, even though it looks like it
-should be: `KGCC` describes the invocation it is read in, while whether to force
-depends on what compiled the `.ko` already sitting on disk — and `make load`
-need not be the invocation that built it.
+Loading is a plain `modprobe` typed by hand rather than a make target, and
+`--force-modversion` likewise. The Makefile builds and cleans, nothing else:
+whether forcing is needed depends on what compiled the `.ko` already sitting on
+disk, which is not something the build invocation knows — `KGCC` describes the
+invocation it is read in, and that need not be the one that produced the module
+being loaded.
 
 ## Can the module be prebuilt and shipped?
 
@@ -136,6 +138,7 @@ until the reboot.
 So `modprobe dxgdrm` by name cannot be the deployment story: the one directory
 it searches is the one that does not keep anything. `modprobe` given a path
 containing a slash loads that file directly instead, which is what both the
-`load` target here and the weaselway repo's `prep-session.sh` do. It skips
+`modprobe ./dxgdrm.ko` in [README.md](README.md) and the weaselway repo's
+`prep-session.sh` do. It skips
 `modules.dep`, which costs nothing — `dxgdrm` links only against DRM core, and
 `CONFIG_DRM=y`.

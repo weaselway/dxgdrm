@@ -28,30 +28,4 @@ all:
 clean:
 	$(MAKE) -C $(KDIR) M=$(CURDIR) $(KBUILD_ARGS) clean
 
-# Empty by default: a build with KGCC set reproduces the MODVERSIONS CRCs
-# exactly and loads unforced. One that fell back to the distro compiler is
-# rejected with "disagrees about version of symbol module_layout"; the struct
-# layouts do match (CONFIG_RANDSTRUCT_NONE), so forcing is safe there, at the
-# cost of tainting the kernel:
-#   make load MODPROBE_FLAGS=--force-modversion
-#
-# Not derivable from KGCC, tempting as that looks: KGCC describes this
-# invocation, forcing depends on what compiled the .ko already on disk.
-MODPROBE_FLAGS ?=
-
-# No install target: on WSL there is nowhere to install to. WSL mounts
-# /usr/lib/modules/$(uname -r) itself, as an overlay whose upper layer lives in
-# its own init mount namespace, so a module copied into .../extra -- and the
-# depmod index pointing at it -- is thrown away at the next `wsl --shutdown`.
-# Load it out of this directory instead. The ./ is load-bearing: modprobe only
-# treats its argument as a file if it contains a slash. Deploying it for real,
-# from somewhere persistent at every boot, is the weaselway repo's job.
-load: all
-	sudo modprobe $(MODPROBE_FLAGS) ./dxgdrm.ko
-	sudo udevadm trigger --subsystem-match=drm
-	sudo udevadm settle
-
-unload:
-	sudo rmmod dxgdrm
-
-.PHONY: all clean load unload
+.PHONY: all clean
