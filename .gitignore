@@ -10,3 +10,6 @@
 .*.cmd
 .tmp_versions/
 /.claude
+
+# nix build output (GC root for the prepared kernel tree)
+/result
