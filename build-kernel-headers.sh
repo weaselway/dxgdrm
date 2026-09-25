@@ -97,6 +97,11 @@ fi
 # bind-mounted. Setting KGCC in the environment overrides all of this and skips
 # the download, for a toolchain that is already on the machine.
 KGCC_VERSION="${KGCC_VERSION:-13.2.0}"
+# Recorded when the version was pinned; overriding KGCC_VERSION means passing
+# its KGCC_SHA256 as well.
+if [ "${KGCC_VERSION}" = 13.2.0 ]; then
+    KGCC_SHA256="${KGCC_SHA256:-2f1975496a15200f2aaef4e0998c530bbcba6ca237285be76f030087da563fb6}"
+fi
 KGCC_DIR="${SCRIPT_DIR}/build/kgcc"
 KGCC_STAMP="${KGCC_DIR}/.version"
 
@@ -115,7 +120,19 @@ if [ ! -x "${KGCC}" ] || [ "$(cat "${KGCC_STAMP}" 2>/dev/null)" != "${KGCC_VERSI
     # prefix; gcc locates its own libexec relative to the binary, so relocating
     # the tree is fine. Running --version is the check that the layout was as
     # expected, so a surprise fails here rather than deep in the kernel build.
-    curl -fsSL "${KGCC_URL}" | tar -xJ -C "${KGCC_DIR}" --strip-components=2
+    if [ -z "${KGCC_SHA256:-}" ]; then
+        echo "build-kernel-headers.sh: set KGCC_SHA256 for gcc ${KGCC_VERSION}" >&2
+        exit 1
+    fi
+    KGCC_TARBALL="${KGCC_DIR}.tar.xz"
+    curl -fsSL --retry 3 -o "${KGCC_TARBALL}" "${KGCC_URL}"
+    if ! echo "${KGCC_SHA256}  ${KGCC_TARBALL}" | sha256sum -c --quiet -; then
+        echo "build-kernel-headers.sh: checksum mismatch for $(basename "${KGCC_URL}")" >&2
+        rm -f "${KGCC_TARBALL}"
+        exit 1
+    fi
+    tar -xJf "${KGCC_TARBALL}" -C "${KGCC_DIR}" --strip-components=2
+    rm -f "${KGCC_TARBALL}"
     "${KGCC}" --version >/dev/null
 
     echo "${KGCC_VERSION}" > "${KGCC_STAMP}"
