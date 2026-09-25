@@ -225,6 +225,9 @@ static int dxgdrm_fence_from_eventfd(struct drm_device *dev, void *data,
 	__poll_t events;
 	int fd, ret;
 
+	if (args->flags || args->pad)
+		return -EINVAL;
+
 	/* One lookup for both the ctx and the poll, so the fd can't be swapped
 	 * for another file in between. */
 	efile = fget(args->eventfd);
