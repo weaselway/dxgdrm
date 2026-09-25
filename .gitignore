@@ -13,3 +13,6 @@
 
 # nix build output (GC root for the prepared kernel tree)
 /result
+
+# build-kernel-headers.sh output (kernel tree, toolchain).
+/build/
