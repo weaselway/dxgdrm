@@ -52,6 +52,7 @@
 #include <linux/dma-fence.h>
 #include <linux/eventfd.h>
 #include <linux/file.h>
+#include <linux/irq_work.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/poll.h>
@@ -73,7 +74,6 @@ struct dxgdrm_device {
 	struct drm_device base;
 };
 
-
 /*
  * A dma_fence that signals when an eventfd does.
  *
@@ -88,9 +88,26 @@ struct dxgdrm_device {
  * reads the eventfd -- a read would consume the count that Mesa's own waiter is
  * looking for -- so this only ever observes.
  *
- * The caller keeps its eventfd. This takes its own reference and drops it when
- * the fence is released.
+ * The caller keeps its eventfd. This holds only the eventfd_ctx (which owns the
+ * wait queue), not the file, so closing the last file reference still wakes us
+ * with EPOLLHUP.
+ *
+ * Each fence gets its own fence context. They are not ordered with respect to
+ * each other, and sync_file_merge()/dma_resv keep only the newest fence per
+ * context, so a shared context would let a merged fence signal early.
+ *
+ * The fence is never signalled from inside the eventfd wakeup: that runs with
+ * current->in_eventfd set, and a drm_syncobj eventfd chained off this fence
+ * would then hit the recursion check in eventfd_signal() and be dropped. The
+ * wakeup queues an irq_work instead.
  */
+
+static unsigned int fence_timeout_ms = 10000;
+module_param(fence_timeout_ms, uint, 0644);
+MODULE_PARM_DESC(fence_timeout_ms,
+		 "Signal an exported fence with -ETIMEDOUT if its eventfd has not fired after this many ms (0 = never)");
+
+static struct workqueue_struct *dxgdrm_wq;
 
 static const char *dxgdrm_fence_get_name(struct dma_fence *fence)
 {
@@ -102,23 +119,23 @@ static void dxgdrm_fence_release_work(struct work_struct *work);
 struct dxgdrm_fence {
 	struct dma_fence	base;
 	spinlock_t		lock;
-	struct file		*efile;
+	struct eventfd_ctx	*ctx;
 	wait_queue_head_t	*wqh;
 	wait_queue_entry_t	wait;
 	poll_table		pt;
+	struct irq_work		signal_work;
+	struct delayed_work	watchdog;
 	struct work_struct	release_work;
 };
-
-static u64 dxgdrm_fence_context;
 
 static void dxgdrm_fence_release(struct dma_fence *fence)
 {
 	struct dxgdrm_fence *f = container_of(fence, struct dxgdrm_fence, base);
 
-	/* Both remove_wait_queue() and fput() can sleep, and a fence may be put
-	 * from atomic context. */
+	/* remove_wait_queue(), the *_sync() calls and eventfd_ctx_put() can
+	 * all sleep, and a fence may be put from atomic context. */
 	INIT_WORK(&f->release_work, dxgdrm_fence_release_work);
-	schedule_work(&f->release_work);
+	queue_work(dxgdrm_wq, &f->release_work);
 }
 
 static void dxgdrm_fence_release_work(struct work_struct *work)
@@ -126,11 +143,20 @@ static void dxgdrm_fence_release_work(struct work_struct *work)
 	struct dxgdrm_fence *f =
 		container_of(work, struct dxgdrm_fence, release_work);
 
+	/* Unhook first so the wakeup can't queue signal_work again. */
 	if (f->wqh)
 		remove_wait_queue(f->wqh, &f->wait);
-	if (f->efile)
-		fput(f->efile);
-	kfree(f);
+	irq_work_sync(&f->signal_work);
+	cancel_delayed_work_sync(&f->watchdog);
+
+	eventfd_ctx_put(f->ctx);
+
+	/* drm_syncobj and dma_resv look at fences under RCU. */
+	kfree_rcu(f, base.rcu);
+
+	/* dxgdrm_exit() drains dxgdrm_wq, so this function finishes before
+	 * the module text goes away. */
+	module_put(THIS_MODULE);
 }
 
 static const struct dma_fence_ops dxgdrm_fence_ops = {
@@ -139,17 +165,42 @@ static const struct dma_fence_ops dxgdrm_fence_ops = {
 	.release		= dxgdrm_fence_release,
 };
 
+static void dxgdrm_fence_signal_work(struct irq_work *work)
+{
+	struct dxgdrm_fence *f =
+		container_of(work, struct dxgdrm_fence, signal_work);
+
+	dma_fence_signal(&f->base);
+	cancel_delayed_work(&f->watchdog);
+}
+
+static void dxgdrm_fence_watchdog(struct work_struct *work)
+{
+	struct dxgdrm_fence *f =
+		container_of(to_delayed_work(work), struct dxgdrm_fence, watchdog);
+	unsigned long flags;
+
+	/* A fence that never signals hangs whoever waits on it. Better to
+	 * signal it with an error, which consumers can at least see. */
+	spin_lock_irqsave(&f->lock, flags);
+	if (!dma_fence_is_signaled_locked(&f->base)) {
+		dma_fence_set_error(&f->base, -ETIMEDOUT);
+		dma_fence_signal_locked(&f->base);
+	}
+	spin_unlock_irqrestore(&f->lock, flags);
+}
+
 static int dxgdrm_fence_wakeup(wait_queue_entry_t *wait, unsigned int mode,
 			       int sync, void *key)
 {
 	struct dxgdrm_fence *f = container_of(wait, struct dxgdrm_fence, wait);
 	__poll_t flags = key_to_poll(key);
 
-	/* EPOLLHUP means the eventfd went away without ever being signalled.
+	/* EPOLLHUP means the eventfd was closed without ever being signalled.
 	 * Signalling anyway is the only safe move: a fence that never signals
 	 * hangs whoever waits on it. */
 	if (flags & (EPOLLIN | EPOLLHUP))
-		dma_fence_signal(&f->base);
+		irq_work_queue(&f->signal_work);
 
 	return 0;
 }
@@ -170,37 +221,51 @@ static int dxgdrm_fence_from_eventfd(struct drm_device *dev, void *data,
 	struct dxgdrm_fence *f;
 	struct eventfd_ctx *ctx;
 	struct sync_file *sync_file;
+	struct file *efile;
 	__poll_t events;
 	int fd, ret;
+
+	/* One lookup for both the ctx and the poll, so the fd can't be swapped
+	 * for another file in between. */
+	efile = fget(args->eventfd);
+	if (!efile)
+		return -EBADF;
 
 	/* Reject anything that is not an eventfd up front: vfs_poll() would
 	 * happily watch some other pollable fd and produce a fence that signals
 	 * on unrelated readability. */
-	ctx = eventfd_ctx_fdget(args->eventfd);
-	if (IS_ERR(ctx))
+	ctx = eventfd_ctx_fileget(efile);
+	if (IS_ERR(ctx)) {
+		fput(efile);
 		return PTR_ERR(ctx);
-	eventfd_ctx_put(ctx);
-
-	f = kzalloc(sizeof(*f), GFP_KERNEL);
-	if (!f)
-		return -ENOMEM;
-
-	f->efile = fget(args->eventfd);
-	if (!f->efile) {
-		kfree(f);
-		return -EBADF;
 	}
 
+	f = kzalloc(sizeof(*f), GFP_KERNEL);
+	if (!f) {
+		eventfd_ctx_put(ctx);
+		fput(efile);
+		return -ENOMEM;
+	}
+
+	/* Dropped by dxgdrm_fence_release_work(). Can't fail: we are running
+	 * this module's ioctl. */
+	__module_get(THIS_MODULE);
+
+	f->ctx = ctx;
 	spin_lock_init(&f->lock);
 	dma_fence_init(&f->base, &dxgdrm_fence_ops, &f->lock,
-		       dxgdrm_fence_context, 1);
+		       dma_fence_context_alloc(1), 1);
 
+	init_irq_work(&f->signal_work, dxgdrm_fence_signal_work);
+	INIT_DELAYED_WORK(&f->watchdog, dxgdrm_fence_watchdog);
 	init_waitqueue_func_entry(&f->wait, dxgdrm_fence_wakeup);
 	init_poll_funcptr(&f->pt, dxgdrm_fence_queue_proc);
 
 	/* Queues f->wait on the eventfd's wait queue as a side effect, and
-	 * reports whether it is signalled already. */
-	events = vfs_poll(f->efile, &f->pt);
+	 * reports whether it is signalled already. The wait queue lives in
+	 * the ctx, so the file reference isn't needed after this. */
+	events = vfs_poll(efile, &f->pt);
+	fput(efile);
 
 	sync_file = sync_file_create(&f->base);
 	if (!sync_file) {
@@ -218,6 +283,9 @@ static int dxgdrm_fence_from_eventfd(struct drm_device *dev, void *data,
 	 * the wakeup never comes, so settle the fence by hand. */
 	if (events & EPOLLIN)
 		dma_fence_signal(&f->base);
+	else if (fence_timeout_ms)
+		queue_delayed_work(dxgdrm_wq, &f->watchdog,
+				   msecs_to_jiffies(fence_timeout_ms));
 
 	fd_install(fd, sync_file->file);
 	dma_fence_put(&f->base);
@@ -227,7 +295,6 @@ static int dxgdrm_fence_from_eventfd(struct drm_device *dev, void *data,
 
 err_put_file:
 	fput(sync_file->file);
-	return ret;
 err_put_fence:
 	dma_fence_put(&f->base);
 	return ret;
@@ -316,25 +383,38 @@ static int __init dxgdrm_init(void)
 {
 	int ret;
 
-	dxgdrm_fence_context = dma_fence_context_alloc(1);
+	dxgdrm_wq = alloc_workqueue("dxgdrm", 0, 0);
+	if (!dxgdrm_wq)
+		return -ENOMEM;
 
 	ret = platform_driver_register(&dxgdrm_platform_driver);
 	if (ret)
-		return ret;
+		goto err_wq;
 
 	dxgdrm_pdev = platform_device_register_simple("dxgdrm", -1, NULL, 0);
 	if (IS_ERR(dxgdrm_pdev)) {
-		platform_driver_unregister(&dxgdrm_platform_driver);
-		return PTR_ERR(dxgdrm_pdev);
+		ret = PTR_ERR(dxgdrm_pdev);
+		goto err_driver;
 	}
 
 	return 0;
+
+err_driver:
+	platform_driver_unregister(&dxgdrm_platform_driver);
+err_wq:
+	destroy_workqueue(dxgdrm_wq);
+	return ret;
 }
 
 static void __exit dxgdrm_exit(void)
 {
 	platform_device_unregister(dxgdrm_pdev);
 	platform_driver_unregister(&dxgdrm_platform_driver);
+	/* Every fence holds a module reference until its release work runs,
+	 * so by now only the tail of those work items can be left. */
+	destroy_workqueue(dxgdrm_wq);
+	/* kfree_rcu() needs nothing from us, but be tidy. */
+	rcu_barrier();
 }
 
 module_init(dxgdrm_init);
