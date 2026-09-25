@@ -7,10 +7,16 @@
 # hardcodes a kernel version.
 name: build
 
+# Pushes to main, and pull requests -- not every push too, which ran a PR's
+# commits twice. Other branches can be built with workflow_dispatch.
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   # The matrix has to exist before the job that uses it, and `ls conf` is not
@@ -20,7 +26,7 @@ jobs:
     outputs:
       matrix: ${{ steps.list.outputs.matrix }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - id: list
         run: |
           matrix="$(ls conf/kernel-*.conf | jq -Rrc '[., inputs] | {config: .}')"
