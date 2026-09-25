@@ -10,11 +10,12 @@
  *
  *     drm_render_node_handle.cc:36]  Can't get version for device: '/dev/dxg'
  *
- * That is the entire requirement. Chromium wants a path it can open, identify
- * and hand to gbm_create_device(); it never issues a driver-specific ioctl,
- * because every buffer still comes from d3d12 through CreateSharedHandle. So
- * this driver allocates nothing and implements no ioctls of its own. It exists
- * to be identified.
+ * That was the original requirement: Chromium wants a path it can open,
+ * identify and hand to gbm_create_device(). Every buffer still comes from
+ * d3d12 through CreateSharedHandle, so this driver allocates nothing. It has
+ * since picked up two more jobs: carrying drm_syncobjs (see the driver
+ * features below) and turning the eventfd behind a d3d12 fence into a real
+ * sync_file (DXGDRM_FENCE_FROM_EVENTFD).
  *
  * Deliberately absent:
  *
@@ -31,22 +32,13 @@
  * On the name. It must not be "vgem" -- Chromium skips that node by name
  * (drm_render_node_path_finder.cc:75) -- and beyond that Chromium does not care;
  * it prefers i915/amdgpu/virtio_gpu and otherwise takes the first survivor with
- * a warning. Mesa cares more. The name goes to loader_get_driver_for_fd(), and
- * gbm_dri.c hands it to driCreateNewScreen3() as a DRI3 screen; a name the pipe
- * loader recognises would build a screen on this fd, which allocates nothing.
- * "d3d12" is tempting and wrong for a subtler reason too: libdril_dri.so is
- * installed as d3d12_dri.so and exports __driDriverGetExtensions_d3d12, so an
- * X11 DRI loader would find a stub screen through it. "dxgdrm" matches no
- * gallium driver and no installed *_dri.so, so every consumer fails to match and
- * falls through to where it was already going.
- *
- * Providing a version has one new consequence worth watching. Previously
- * dri_screen_create() bailed at loader_get_driver_for_fd() returning NULL, so
- * the zink fallback below it was unreachable. It is reachable now: on failing to
- * match the name, gbm retries as "zink" before giving up (gbm_dri.c:294). Zink
- * matches a VkPhysicalDevice to the fd via VK_EXT_physical_device_drm and should
- * find none for this device -- but if it ever did, the session would silently
- * land on lavapipe. Worth checking that gbm still reports the swrast path.
+ * a warning. Mesa cares more: the name is what its pipe loader matches drivers
+ * on. The weaselway mesa has a "dxgdrm" entry there that creates the d3d12
+ * screen (which reaches the GPU through /dev/dxg and uses this node only for
+ * fences), so gbm and EGL on this node end up on d3d12 rather than falling
+ * back to kmsro, zink or software. "d3d12" itself would be wrong: that name
+ * would send an unpatched mesa, and the installed d3d12_dri.so, down paths
+ * that expect a d3d12 device behind the fd.
  */
 
 #include <linux/dma-fence.h>
