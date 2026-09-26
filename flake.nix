@@ -245,7 +245,6 @@
                 version = "0-${kernelRelease}";
                 src = lib.cleanSource self;
 
-                nativeBuildInputs = kbuildTools;
                 hardeningDisable = [ "all" ];
 
                 KDIR = "${kernelDev}";
@@ -256,12 +255,26 @@
                   runHook postBuild
                 '';
 
+                nativeBuildInputs = kbuildTools ++ [ pkgs.removeReferencesTo ];
+
+                # The module carries paths into the prepared kernel tree: in its
+                # debug info, and as __FILE__ strings from WARN()s in inline
+                # kernel headers. Left in, Nix counts the whole tree (and kgcc
+                # and gcc through it) as a runtime dependency of the module --
+                # 2 GB of closure in the NixOS image. The debug info goes
+                # (modprobe does not need it; .BTF stays), the strings get
+                # their store hash blanked, and disallowedReferences keeps it
+                # that way.
                 installPhase = ''
                   runHook preInstall
+                  ${crossCompile}objcopy --strip-debug dxgdrm.ko
+                  remove-references-to -t ${kernelDev} dxgdrm.ko
                   install -Dm644 dxgdrm.ko $out/lib/modules/${kernelRelease}/extra/dxgdrm.ko
                   install -Dm644 99-dxgdrm.rules $out/lib/udev/rules.d/99-dxgdrm.rules
                   runHook postInstall
                 '';
+
+                disallowedReferences = [ kernelDev ] ++ lib.optional haveKgcc kgcc;
 
                 dontFixup = true;
               }
