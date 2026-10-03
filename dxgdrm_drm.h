@@ -42,11 +42,111 @@ struct drm_dxgdrm_fence_from_eventfd {
 	__u32 pad;
 };
 
+/*
+ * The presenter side of the virtual display (kms-wsl spike).
+ *
+ * dxgdrm has one CRTC with a primary and a cursor plane and nothing behind
+ * them. Whatever the compositor commits is handed to a userspace presenter
+ * through the two ioctls below, which is what reads the frame back and gets it
+ * to Windows.
+ *
+ * A primary framebuffer is one of two things. A d3d12 buffer is a D3D12 shared
+ * handle that the compositor imported with DRM_IOCTL_PRIME_FD_TO_HANDLE (the
+ * node accepts those although they are not dma-bufs); the presenter gets an fd
+ * for the same shared handle and opens it on its own device. A dumb buffer is
+ * plain memory and is read with DXGDRM_READ_PIXELS.
+ */
+
+#define DXGDRM_MAX_DAMAGE_RECTS		16
+
+/* The primary plane has a framebuffer. */
+#define DXGDRM_FRAME_PRIMARY		(1 << 0)
+/* It is a D3D12 shared handle, and @fd is valid. */
+#define DXGDRM_FRAME_SHARED		(1 << 1)
+/* It is a dumb buffer, to be read with DXGDRM_READ_PIXELS. */
+#define DXGDRM_FRAME_DUMB		(1 << 2)
+/* Too many rects, or a new buffer layout: treat the whole frame as damaged. */
+#define DXGDRM_FRAME_DAMAGE_FULL	(1 << 3)
+/* The cursor plane has a framebuffer (always a dumb buffer). */
+#define DXGDRM_FRAME_CURSOR		(1 << 4)
+
+struct drm_dxgdrm_rect {
+	__s32 x1, y1, x2, y2;
+};
+
+struct drm_dxgdrm_get_frame {
+	/**
+	 * @seq: in, the sequence number the caller has already seen (0 at
+	 * first); out, the current one. The call blocks until they differ.
+	 * Every commit that touches either plane bumps it.
+	 */
+	__u64 seq;
+	/** @timeout_ms: in, give up with -ETIME after this long; 0 waits forever. */
+	__u32 timeout_ms;
+	/** @flags: out, DXGDRM_FRAME_*. */
+	__u32 flags;
+
+	/**
+	 * @buffer_id: out, identifies the buffer behind the primary plane for
+	 * as long as it exists, so the presenter can cache its import.
+	 */
+	__u64 buffer_id;
+	/** @primary_seq: out, bumped when the primary plane's content changes. */
+	__u64 primary_seq;
+	/** @cursor_seq: out, bumped when the cursor image changes (not on moves). */
+	__u64 cursor_seq;
+
+	__u32 width;
+	__u32 height;
+	__u32 format;	/* DRM_FORMAT_* */
+	__u32 pitch;
+
+	/**
+	 * @fd: out, a new fd for the shared handle if DXGDRM_FRAME_SHARED,
+	 * otherwise -1. The caller closes it.
+	 */
+	__s32 fd;
+	/** @num_damage: out, rects in @damage, accumulated since the last call. */
+	__u32 num_damage;
+	struct drm_dxgdrm_rect damage[DXGDRM_MAX_DAMAGE_RECTS];
+
+	/* Cursor plane: top-left position on the CRTC and image size. */
+	__s32 cursor_x;
+	__s32 cursor_y;
+	__u32 cursor_width;
+	__u32 cursor_height;
+};
+
+#define DXGDRM_PLANE_PRIMARY	0
+#define DXGDRM_PLANE_CURSOR	1
+
+struct drm_dxgdrm_read_pixels {
+	/** @plane: DXGDRM_PLANE_*. Its framebuffer must be a dumb buffer. */
+	__u32 plane;
+	/** @size: bytes available at @data. */
+	__u32 size;
+	/** @data: user pointer the pixels are copied to, pitch * height bytes. */
+	__u64 data;
+	/* out */
+	__u32 width;
+	__u32 height;
+	__u32 format;
+	__u32 pitch;
+};
+
 #define DRM_DXGDRM_FENCE_FROM_EVENTFD	0x00
+#define DRM_DXGDRM_GET_FRAME		0x01
+#define DRM_DXGDRM_READ_PIXELS		0x02
 
 #define DRM_IOCTL_DXGDRM_FENCE_FROM_EVENTFD				\
 	DRM_IOWR(DRM_COMMAND_BASE + DRM_DXGDRM_FENCE_FROM_EVENTFD,	\
 		 struct drm_dxgdrm_fence_from_eventfd)
+#define DRM_IOCTL_DXGDRM_GET_FRAME					\
+	DRM_IOWR(DRM_COMMAND_BASE + DRM_DXGDRM_GET_FRAME,		\
+		 struct drm_dxgdrm_get_frame)
+#define DRM_IOCTL_DXGDRM_READ_PIXELS					\
+	DRM_IOWR(DRM_COMMAND_BASE + DRM_DXGDRM_READ_PIXELS,		\
+		 struct drm_dxgdrm_read_pixels)
 
 #if defined(__cplusplus)
 }
