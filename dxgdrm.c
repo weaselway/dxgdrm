@@ -636,13 +636,10 @@ static void dxgdrm_cursor_atomic_update(struct drm_plane *plane,
 					struct drm_atomic_state *state)
 {
 	struct dxgdrm_device *dxg = to_dxgdrm(plane->dev);
-	struct drm_plane_state *old_state =
-		drm_atomic_get_old_plane_state(state, plane);
 	struct drm_plane_state *new_state =
 		drm_atomic_get_new_plane_state(state, plane);
 	struct drm_framebuffer *fb = new_state->fb;
 	struct drm_framebuffer *old_fb;
-	struct drm_rect damage;
 
 	if (fb)
 		drm_framebuffer_get(fb);
@@ -655,9 +652,11 @@ static void dxgdrm_cursor_atomic_update(struct drm_plane *plane,
 	dxg->cursor_hot_x = new_state->hotspot_x;
 	dxg->cursor_hot_y = new_state->hotspot_y;
 
-	/* A move alone leaves the image as it was. */
-	if (fb != old_fb ||
-	    drm_atomic_helper_damage_merged(old_state, new_state, &damage))
+	/* A move alone leaves the image as it was. The image changes with the
+	 * framebuffer, or, for a compositor that redraws one in place, when it
+	 * says so with damage clips. The damage helpers are no use here: they
+	 * read "no clips" as "everything", which every move would be. */
+	if (fb != old_fb || drm_plane_get_damage_clips_count(new_state))
 		dxg->cursor_seq++;
 	dxg->seq++;
 	mutex_unlock(&dxg->frame_lock);
@@ -817,6 +816,7 @@ static int dxgdrm_modeset_init(struct dxgdrm_device *dxg)
 	if (ret)
 		return ret;
 	drm_plane_helper_add(&dxg->cursor, &dxgdrm_cursor_helper_funcs);
+	drm_plane_enable_fb_damage_clips(&dxg->cursor);
 	ret = dxgdrm_cursor_create_hotspot_properties(&dxg->cursor);
 	if (ret)
 		return ret;
