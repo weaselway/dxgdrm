@@ -67,8 +67,11 @@ struct drm_dxgdrm_fence_from_eventfd {
 #define DXGDRM_FRAME_DUMB		(1 << 2)
 /* Too many rects, or a new buffer layout: treat the whole frame as damaged. */
 #define DXGDRM_FRAME_DAMAGE_FULL	(1 << 3)
-/* The cursor plane has a framebuffer (always a dumb buffer). */
+/* The cursor plane has a framebuffer. */
 #define DXGDRM_FRAME_CURSOR		(1 << 4)
+/* It is a D3D12 shared handle, and @cursor_fd is valid; otherwise it is a dumb
+ * buffer, to be read with DXGDRM_READ_PIXELS. */
+#define DXGDRM_FRAME_CURSOR_SHARED	(1 << 5)
 
 struct drm_dxgdrm_rect {
 	__s32 x1, y1, x2, y2;
@@ -115,6 +118,20 @@ struct drm_dxgdrm_get_frame {
 	__s32 cursor_y;
 	__u32 cursor_width;
 	__u32 cursor_height;
+	/**
+	 * @cursor_hot_x: the point inside the image that is the pointer
+	 * position, as the compositor set it through HOTSPOT_X/HOTSPOT_Y. Zero
+	 * if it sets none.
+	 */
+	__s32 cursor_hot_x;
+	__s32 cursor_hot_y;
+	__u32 cursor_format;
+	__u32 cursor_pitch;
+	/** @cursor_buffer_id: like @buffer_id, for the cursor plane. */
+	__u64 cursor_buffer_id;
+	/** @cursor_fd: like @fd, if DXGDRM_FRAME_CURSOR_SHARED. */
+	__s32 cursor_fd;
+	__u32 pad;
 };
 
 #define DXGDRM_PLANE_PRIMARY	0

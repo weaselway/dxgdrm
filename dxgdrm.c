@@ -51,6 +51,7 @@
 
 #include <linux/dma-fence.h>
 #include <linux/eventfd.h>
+#include <linux/fdtable.h>
 #include <linux/file.h>
 #include <linux/irq_work.h>
 #include <linux/module.h>
@@ -107,6 +108,7 @@ struct dxgdrm_device {
 	struct drm_framebuffer *primary_fb;
 	struct drm_framebuffer *cursor_fb;
 	int cursor_x, cursor_y;
+	int cursor_hot_x, cursor_hot_y;
 	struct drm_dxgdrm_rect damage[DXGDRM_MAX_DAMAGE_RECTS];
 	unsigned int num_damage;
 	bool damage_full;
@@ -558,13 +560,6 @@ static int dxgdrm_plane_atomic_check(struct drm_plane *plane,
 	if (!new_state->crtc)
 		return 0;
 
-	/* The cursor image is read by the CPU, in DXGDRM_READ_PIXELS. A
-	 * compositor that offers a GPU buffer falls back to drawing the cursor
-	 * into the frame. */
-	if (is_cursor && new_state->fb &&
-	    !to_dxgdrm_gem(new_state->fb->obj[0])->vaddr)
-		return -EINVAL;
-
 	crtc_state = drm_atomic_get_new_crtc_state(state, new_state->crtc);
 	return drm_atomic_helper_check_plane_state(new_state, crtc_state,
 						   DRM_PLANE_NO_SCALING,
@@ -655,6 +650,8 @@ static void dxgdrm_cursor_atomic_update(struct drm_plane *plane,
 	dxg->cursor_fb = fb;
 	dxg->cursor_x = new_state->crtc_x;
 	dxg->cursor_y = new_state->crtc_y;
+	dxg->cursor_hot_x = new_state->hotspot_x;
+	dxg->cursor_hot_y = new_state->hotspot_y;
 
 	/* A move alone leaves the image as it was. */
 	if (fb != old_fb ||
@@ -688,6 +685,37 @@ static const struct drm_plane_funcs dxgdrm_plane_funcs = {
 	.atomic_duplicate_state	= drm_atomic_helper_plane_duplicate_state,
 	.atomic_destroy_state	= drm_atomic_helper_plane_destroy_state,
 };
+
+/*
+ * HOTSPOT_X/HOTSPOT_Y on the cursor plane, without DRIVER_CURSOR_HOTSPOT.
+ *
+ * The presenter wants the hotspot so the client can make the image a real
+ * Windows cursor. The stock way to get the properties is the driver feature,
+ * but that also hides the cursor plane from every client that does not set
+ * DRM_CLIENT_CAP_CURSOR_PLANE_HOTSPOT -- and KWin only sets it for a fixed
+ * list of VM drivers, so it would lose the plane and draw the cursor into the
+ * frame. Without the feature bit the plane stays visible to everyone, and both
+ * mutter and KWin set the properties whenever they exist. drm core stores them
+ * in the plane state once the plane's property pointers are set.
+ */
+static int dxgdrm_cursor_create_hotspot_properties(struct drm_plane *plane)
+{
+	struct drm_property *prop_x, *prop_y;
+
+	prop_x = drm_property_create_signed_range(plane->dev, 0, "HOTSPOT_X",
+						  INT_MIN, INT_MAX);
+	prop_y = drm_property_create_signed_range(plane->dev, 0, "HOTSPOT_Y",
+						  INT_MIN, INT_MAX);
+	/* Properties are freed with the mode config. */
+	if (!prop_x || !prop_y)
+		return -ENOMEM;
+
+	drm_object_attach_property(&plane->base, prop_x, 0);
+	drm_object_attach_property(&plane->base, prop_y, 0);
+	plane->hotspot_x_property = prop_x;
+	plane->hotspot_y_property = prop_y;
+	return 0;
+}
 
 static void dxgdrm_crtc_atomic_enable(struct drm_crtc *crtc,
 				      struct drm_atomic_state *state)
@@ -787,6 +815,9 @@ static int dxgdrm_modeset_init(struct dxgdrm_device *dxg)
 	if (ret)
 		return ret;
 	drm_plane_helper_add(&dxg->cursor, &dxgdrm_cursor_helper_funcs);
+	ret = dxgdrm_cursor_create_hotspot_properties(&dxg->cursor);
+	if (ret)
+		return ret;
 
 	ret = drm_crtc_init_with_planes(dev, &dxg->crtc, &dxg->primary,
 					&dxg->cursor, &dxgdrm_crtc_funcs, NULL);
@@ -832,7 +863,7 @@ static int dxgdrm_get_frame_ioctl(struct drm_device *dev, void *data,
 	u64 seen = args->seq;
 	long timeout = MAX_SCHEDULE_TIMEOUT;
 	long ret;
-	int fd = -1;
+	int fd = -1, cursor_fd = -1;
 
 	if (args->timeout_ms)
 		timeout = msecs_to_jiffies(args->timeout_ms);
@@ -847,6 +878,7 @@ static int dxgdrm_get_frame_ioctl(struct drm_device *dev, void *data,
 
 	memset(args, 0, sizeof(*args));
 	args->fd = -1;
+	args->cursor_fd = -1;
 
 	mutex_lock(&dxg->frame_lock);
 
@@ -885,11 +917,32 @@ static int dxgdrm_get_frame_ioctl(struct drm_device *dev, void *data,
 
 	fb = dxg->cursor_fb;
 	if (fb) {
+		struct dxgdrm_gem *gem = to_dxgdrm_gem(fb->obj[0]);
+
+		/* KWin renders the cursor on the GPU like any other layer. */
+		if (gem->shared) {
+			cursor_fd = get_unused_fd_flags(O_CLOEXEC);
+			if (cursor_fd < 0) {
+				mutex_unlock(&dxg->frame_lock);
+				if (fd >= 0)
+					close_fd(fd);
+				return cursor_fd;
+			}
+			fd_install(cursor_fd, get_file(gem->shared));
+			args->cursor_fd = cursor_fd;
+			args->flags |= DXGDRM_FRAME_CURSOR_SHARED;
+		}
+
 		args->flags |= DXGDRM_FRAME_CURSOR;
+		args->cursor_buffer_id = gem->id;
 		args->cursor_x = dxg->cursor_x;
 		args->cursor_y = dxg->cursor_y;
+		args->cursor_hot_x = dxg->cursor_hot_x;
+		args->cursor_hot_y = dxg->cursor_hot_y;
 		args->cursor_width = fb->width;
 		args->cursor_height = fb->height;
+		args->cursor_format = fb->format->format;
+		args->cursor_pitch = fb->pitches[0];
 	}
 
 	args->seq = dxg->seq;
