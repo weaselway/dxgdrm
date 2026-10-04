@@ -60,8 +60,7 @@ picks the one matching `uname -r`.
 built with nixpkgs' gcc 15 is rejected ("disagrees about version of symbol").
 kgcc avoids that, and the config check proves that the toolchain matches. The
 built module's vermagic is `6.18.33.2-microsoft-standard-WSL2 SMP preempt
-mod_unload modversions`. Loading it on a real WSL kernel hasn't been tried yet.
-See [BUILD-NOTES.md](BUILD-NOTES.md) for background.
+mod_unload modversions`, and it loads on that WSL kernel. See [BUILD-NOTES.md](BUILD-NOTES.md) for background.
 
 ## Notes
 

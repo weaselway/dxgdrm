@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * dxgdrm - a DRM render node for the d3d12 Mesa driver under WSL.
+ * dxgdrm - a DRM render node and virtual display for the d3d12 Mesa driver
+ * under WSL.
  *
  * WSL exposes the GPU as /dev/dxg, a dxgkrnl channel, and never creates a DRM
  * node. Mesa is fine with that -- the d3d12 gallium driver talks to dxcore --
@@ -17,7 +18,7 @@
  * features below) and turning the eventfd behind a d3d12 fence into a real
  * sync_file (DXGDRM_FENCE_FROM_EVENTFD).
  *
- * kms-wsl spike: the node is also a virtual display. It has one CRTC with a
+ * The device is also a virtual display. It has one CRTC with a
  * primary and a cursor plane, so an unmodified compositor (mutter's or KWin's
  * native backend) can scan out to it like to any other KMS device. There is no
  * hardware behind the planes: each commit is handed to a userspace presenter
@@ -90,7 +91,7 @@
 #include "dxgdrm_drm.h"
 
 #define DRIVER_NAME	"dxgdrm"
-#define DRIVER_DESC	"Render node for the WSL d3d12 Mesa driver"
+#define DRIVER_DESC	"Render node and virtual display for the WSL d3d12 Mesa driver"
 
 struct dxgdrm_device {
 	struct drm_device base;

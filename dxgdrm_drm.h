@@ -1,9 +1,10 @@
 /* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
- * UAPI for the dxgdrm render node.
+ * UAPI for the dxgdrm node.
  *
- * One ioctl, and it exists because of a mismatch: D3D12 completion under WSL is
- * reported through an eventfd (ID3D12Fence::SetEventOnCompletion), while every
+ * DXGDRM_FENCE_FROM_EVENTFD exists because of a mismatch: D3D12 completion
+ * under WSL is reported through an eventfd
+ * (ID3D12Fence::SetEventOnCompletion), while every
  * consumer of a fence on the Linux side wants a sync_file backed by a
  * dma_fence. An eventfd polls the same way but fails SYNC_IOC_FILE_INFO, cannot
  * be imported into a syncobj, and cannot be merged.
@@ -43,7 +44,7 @@ struct drm_dxgdrm_fence_from_eventfd {
 };
 
 /*
- * The presenter side of the virtual display (kms-wsl spike).
+ * The presenter side of the virtual display.
  *
  * dxgdrm has one CRTC with a primary and a cursor plane and nothing behind
  * them. Whatever the compositor commits is handed to a userspace presenter
