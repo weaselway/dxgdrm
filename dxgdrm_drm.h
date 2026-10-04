@@ -163,9 +163,41 @@ struct drm_dxgdrm_read_pixels {
 	__u32 pitch;
 };
 
+/**
+ * struct drm_dxgdrm_ack_frame - the presenter has taken a frame
+ *
+ * While a presenter is attached (a file that has called DXGDRM_GET_FRAME is
+ * open), the page flip that brought a new frame completes only when this is
+ * called with that frame's primary_seq or a later one, or after the module's
+ * flip_timeout_ms (default 100). The compositor does not start its next frame
+ * before that, which is how it is held to the presenter's pace.
+ *
+ * "Taken" means the readback has been issued, not that it has finished: the
+ * buffer is not rendered to again before the flip after the next one, and the
+ * presenter acknowledges the next one only once this readback is done.
+ */
+struct drm_dxgdrm_ack_frame {
+	/** @primary_seq: in, as DXGDRM_GET_FRAME returned it. */
+	__u64 primary_seq;
+};
+
+/**
+ * struct drm_dxgdrm_set_mode - set the size of the virtual display
+ *
+ * The connector then offers exactly one mode, of this size, and a hotplug
+ * event tells the compositor to look. It is the compositor that switches;
+ * the presenter sees the new size in the frames that follow.
+ */
+struct drm_dxgdrm_set_mode {
+	__u32 width;
+	__u32 height;
+};
+
 #define DRM_DXGDRM_FENCE_FROM_EVENTFD	0x00
 #define DRM_DXGDRM_GET_FRAME		0x01
 #define DRM_DXGDRM_READ_PIXELS		0x02
+#define DRM_DXGDRM_ACK_FRAME		0x03
+#define DRM_DXGDRM_SET_MODE		0x04
 
 #define DRM_IOCTL_DXGDRM_FENCE_FROM_EVENTFD				\
 	DRM_IOWR(DRM_COMMAND_BASE + DRM_DXGDRM_FENCE_FROM_EVENTFD,	\
@@ -176,6 +208,12 @@ struct drm_dxgdrm_read_pixels {
 #define DRM_IOCTL_DXGDRM_READ_PIXELS					\
 	DRM_IOWR(DRM_COMMAND_BASE + DRM_DXGDRM_READ_PIXELS,		\
 		 struct drm_dxgdrm_read_pixels)
+#define DRM_IOCTL_DXGDRM_ACK_FRAME					\
+	DRM_IOW(DRM_COMMAND_BASE + DRM_DXGDRM_ACK_FRAME,		\
+		struct drm_dxgdrm_ack_frame)
+#define DRM_IOCTL_DXGDRM_SET_MODE					\
+	DRM_IOW(DRM_COMMAND_BASE + DRM_DXGDRM_SET_MODE,			\
+		struct drm_dxgdrm_set_mode)
 
 #if defined(__cplusplus)
 }

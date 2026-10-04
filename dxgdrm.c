@@ -59,6 +59,7 @@
 #include <linux/poll.h>
 #include <linux/slab.h>
 #include <linux/sync_file.h>
+#include <linux/timer.h>
 #include <linux/workqueue.h>
 
 #include <linux/dma-buf.h>
@@ -114,6 +115,25 @@ struct dxgdrm_device {
 	bool damage_full;
 	/* A client holds DRM master, see DXGDRM_FRAME_OWNED. */
 	bool owned;
+
+	/* The size of the one mode the connector offers, see
+	 * dxgdrm_set_mode_ioctl(). Under frame_lock. */
+	unsigned int mode_width, mode_height;
+	struct drm_property *hotplug_mode_update;
+
+	/*
+	 * Flip throttling, see dxgdrm_crtc_atomic_flush(). @flip_seq is the
+	 * primary_seq of the commit in progress if it brought a new frame, 0
+	 * otherwise; only the commit itself touches it. The rest is under
+	 * the device's event_lock.
+	 */
+	u64 flip_seq;
+	u64 acked_seq;
+	u64 held_seq;
+	struct drm_pending_vblank_event *held_event;
+	struct timer_list flip_timer;
+	/* Open files that have called DXGDRM_GET_FRAME. */
+	atomic_t presenters;
 };
 
 #define to_dxgdrm(dev) container_of(dev, struct dxgdrm_device, base)
@@ -526,18 +546,25 @@ static int dxgdrm_prime_fd_to_handle(struct drm_device *dev,
  *
  * Nothing is scanned out. A commit records which framebuffer each plane shows
  * and what was damaged, bumps a sequence number and wakes the presenter. There
- * is no vblank either: the atomic helpers complete every flip right away
- * (drm_atomic_helper_fake_vblank()), and the compositor's own frame clock is
- * what limits it to the mode's refresh rate.
+ * is no vblank either. A flip that brings a new frame completes when the
+ * presenter has taken that frame (DXGDRM_ACK_FRAME), which is what holds the
+ * compositor to the rate the frames can be read back at; every other commit
+ * completes right away, and the compositor's own frame clock limits it to the
+ * mode's refresh rate.
  */
 
 static unsigned int width = 1920;
 module_param(width, uint, 0444);
-MODULE_PARM_DESC(width, "Width of the virtual display's preferred mode");
+MODULE_PARM_DESC(width, "Width of the virtual display's mode until a presenter sets one");
 
 static unsigned int height = 1080;
 module_param(height, uint, 0444);
-MODULE_PARM_DESC(height, "Height of the virtual display's preferred mode");
+MODULE_PARM_DESC(height, "Height of the virtual display's mode until a presenter sets one");
+
+static unsigned int flip_timeout_ms = 100;
+module_param(flip_timeout_ms, uint, 0644);
+MODULE_PARM_DESC(flip_timeout_ms,
+		 "Complete a page flip after this many ms if the presenter has not acknowledged the frame (0 = do not wait for it)");
 
 #define DXGDRM_MAX_DIMENSION	8192
 #define DXGDRM_CURSOR_SIZE	256
@@ -640,6 +667,8 @@ static void dxgdrm_primary_atomic_update(struct drm_plane *plane,
 
 	dxg->primary_seq++;
 	dxg->seq++;
+	/* Turning the plane off is nothing a presenter has to read back. */
+	dxg->flip_seq = fb ? dxg->primary_seq : 0;
 	mutex_unlock(&dxg->frame_lock);
 
 	if (old_fb)
@@ -733,6 +762,70 @@ static int dxgdrm_cursor_create_hotspot_properties(struct drm_plane *plane)
 	return 0;
 }
 
+/* Complete the flip that is being held back, if @seq allows it. With the
+ * device's event_lock held. */
+static void dxgdrm_release_flip_locked(struct dxgdrm_device *dxg, u64 seq)
+{
+	if (!dxg->held_event || dxg->held_seq > seq)
+		return;
+
+	drm_crtc_send_vblank_event(&dxg->crtc, dxg->held_event);
+	dxg->held_event = NULL;
+	timer_delete(&dxg->flip_timer);
+}
+
+static void dxgdrm_flip_timeout(struct timer_list *timer)
+{
+	struct dxgdrm_device *dxg =
+		timer_container_of(dxg, timer, flip_timer);
+	unsigned long flags;
+
+	spin_lock_irqsave(&dxg->base.event_lock, flags);
+	dxgdrm_release_flip_locked(dxg, U64_MAX);
+	spin_unlock_irqrestore(&dxg->base.event_lock, flags);
+}
+
+/*
+ * Back-pressure. The compositor does not start its next frame before the
+ * flip event of the previous one. A commit that brings a new frame gets its
+ * event only when a presenter says it has taken that frame, so a compositor
+ * that renders faster than the frames can be read back waits here instead of
+ * producing frames nobody sees. It also means the buffer a readback was
+ * issued on is not rendered to again before the readback is done: it can be
+ * reused two flips later at the earliest, and the presenter acknowledges the
+ * one in between only after that.
+ *
+ * Without a presenter, or if it does not answer within flip_timeout_ms, the
+ * event goes out anyway.
+ */
+static void dxgdrm_crtc_atomic_flush(struct drm_crtc *crtc,
+				     struct drm_atomic_state *state)
+{
+	struct dxgdrm_device *dxg = to_dxgdrm(crtc->dev);
+	struct drm_pending_vblank_event *event = crtc->state->event;
+	u64 flip_seq = dxg->flip_seq;
+
+	dxg->flip_seq = 0;
+	if (!event)
+		return;
+	crtc->state->event = NULL;
+
+	spin_lock_irq(&crtc->dev->event_lock);
+	/* Cannot be there: the next commit waits for this event. */
+	dxgdrm_release_flip_locked(dxg, U64_MAX);
+
+	if (flip_seq > dxg->acked_seq && flip_timeout_ms &&
+	    atomic_read(&dxg->presenters) > 0) {
+		dxg->held_event = event;
+		dxg->held_seq = flip_seq;
+		mod_timer(&dxg->flip_timer,
+			  jiffies + msecs_to_jiffies(flip_timeout_ms));
+	} else {
+		drm_crtc_send_vblank_event(crtc, event);
+	}
+	spin_unlock_irq(&crtc->dev->event_lock);
+}
+
 static void dxgdrm_crtc_atomic_enable(struct drm_crtc *crtc,
 				      struct drm_atomic_state *state)
 {
@@ -744,6 +837,7 @@ static void dxgdrm_crtc_atomic_disable(struct drm_crtc *crtc,
 }
 
 static const struct drm_crtc_helper_funcs dxgdrm_crtc_helper_funcs = {
+	.atomic_flush	= dxgdrm_crtc_atomic_flush,
 	.atomic_enable	= dxgdrm_crtc_atomic_enable,
 	.atomic_disable	= dxgdrm_crtc_atomic_disable,
 };
@@ -757,24 +851,42 @@ static const struct drm_crtc_funcs dxgdrm_crtc_funcs = {
 	.atomic_destroy_state	= drm_atomic_helper_crtc_destroy_state,
 };
 
+/*
+ * One mode, of the size the presenter asked for last: its client's window.
+ * With a list to choose from, a compositor that remembers a configuration for
+ * this connector would stay on the mode it had.
+ *
+ * Built by hand: drm_cvt_mode() rounds the width down to a multiple of eight,
+ * and a window can have any width.
+ */
 static int dxgdrm_connector_get_modes(struct drm_connector *connector)
 {
+	struct dxgdrm_device *dxg = to_dxgdrm(connector->dev);
 	struct drm_display_mode *mode;
-	int count;
+	unsigned int w, h;
 
-	count = drm_add_modes_noedid(connector, DXGDRM_MAX_DIMENSION,
-				     DXGDRM_MAX_DIMENSION);
+	mutex_lock(&dxg->frame_lock);
+	w = dxg->mode_width;
+	h = dxg->mode_height;
+	mutex_unlock(&dxg->frame_lock);
 
-	/* The preferred mode need not be one of the standard ones. */
-	mode = drm_cvt_mode(connector->dev, width, height, 60, false, false,
-			    false);
-	if (mode) {
-		mode->type |= DRM_MODE_TYPE_PREFERRED | DRM_MODE_TYPE_DRIVER;
-		drm_mode_probed_add(connector, mode);
-		count++;
-	}
+	mode = drm_mode_create(connector->dev);
+	if (!mode)
+		return 0;
 
-	return count;
+	mode->hdisplay = w;
+	mode->hsync_start = w + 48;
+	mode->hsync_end = w + 48 + 32;
+	mode->htotal = w + 160;
+	mode->vdisplay = h;
+	mode->vsync_start = h + 3;
+	mode->vsync_end = h + 3 + 5;
+	mode->vtotal = h + 31;
+	mode->clock = DIV_ROUND_CLOSEST(mode->htotal * mode->vtotal * 60, 1000);
+	mode->type = DRM_MODE_TYPE_PREFERRED | DRM_MODE_TYPE_DRIVER;
+	drm_mode_set_name(mode);
+	drm_mode_probed_add(connector, mode);
+	return 1;
 }
 
 static const struct drm_connector_helper_funcs dxgdrm_connector_helper_funcs = {
@@ -859,6 +971,17 @@ static int dxgdrm_modeset_init(struct dxgdrm_device *dxg)
 	if (ret)
 		return ret;
 
+	/* What qxl, virtio-gpu and vmwgfx have for the same purpose: it tells
+	 * the compositor to follow the preferred mode on a hotplug event
+	 * instead of restoring what it had (mutter checks for it). */
+	dxg->hotplug_mode_update =
+		drm_property_create_range(dev, DRM_MODE_PROP_IMMUTABLE,
+					  "hotplug_mode_update", 0, 1);
+	if (!dxg->hotplug_mode_update)
+		return -ENOMEM;
+	drm_object_attach_property(&dxg->connector.base,
+				   dxg->hotplug_mode_update, 1);
+
 	drm_mode_config_reset(dev);
 	return 0;
 }
@@ -900,7 +1023,7 @@ static void dxgdrm_master_drop(struct drm_device *dev, struct drm_file *file)
 /* What poll() needs to know about an open file: whether it is a presenter at
  * all, and the sequence number DXGDRM_GET_FRAME last left it with. */
 struct dxgdrm_file {
-	bool presenter;
+	unsigned long presenter;	/* bit 0 */
 	u64 seen_seq;
 };
 
@@ -916,7 +1039,18 @@ static int dxgdrm_open(struct drm_device *dev, struct drm_file *file)
 
 static void dxgdrm_postclose(struct drm_device *dev, struct drm_file *file)
 {
-	kfree(file->driver_priv);
+	struct dxgdrm_device *dxg = to_dxgdrm(dev);
+	struct dxgdrm_file *priv = file->driver_priv;
+
+	/* Nobody is left to acknowledge the frame a flip is waiting for. */
+	if (test_bit(0, &priv->presenter) &&
+	    atomic_dec_and_test(&dxg->presenters)) {
+		spin_lock_irq(&dev->event_lock);
+		dxgdrm_release_flip_locked(dxg, U64_MAX);
+		spin_unlock_irq(&dev->event_lock);
+	}
+
+	kfree(priv);
 	file->driver_priv = NULL;
 }
 
@@ -938,7 +1072,8 @@ static int dxgdrm_get_frame_ioctl(struct drm_device *dev, void *data,
 	/* From here on the file polls readable whenever there is something
 	 * this call has not returned yet. */
 	WRITE_ONCE(priv->seen_seq, seen);
-	WRITE_ONCE(priv->presenter, true);
+	if (!test_and_set_bit(0, &priv->presenter))
+		atomic_inc(&dxg->presenters);
 
 	ret = wait_event_interruptible_timeout(dxg->frame_wq,
 					       READ_ONCE(dxg->seq) != seen,
@@ -1077,12 +1212,54 @@ static int dxgdrm_read_pixels_ioctl(struct drm_device *dev, void *data,
 	return ret;
 }
 
+static int dxgdrm_ack_frame_ioctl(struct drm_device *dev, void *data,
+				  struct drm_file *file)
+{
+	struct dxgdrm_device *dxg = to_dxgdrm(dev);
+	struct drm_dxgdrm_ack_frame *args = data;
+
+	spin_lock_irq(&dev->event_lock);
+	if (args->primary_seq > dxg->acked_seq)
+		dxg->acked_seq = args->primary_seq;
+	dxgdrm_release_flip_locked(dxg, dxg->acked_seq);
+	spin_unlock_irq(&dev->event_lock);
+	return 0;
+}
+
+static int dxgdrm_set_mode_ioctl(struct drm_device *dev, void *data,
+				 struct drm_file *file)
+{
+	struct dxgdrm_device *dxg = to_dxgdrm(dev);
+	struct drm_dxgdrm_set_mode *args = data;
+	bool changed;
+
+	if (args->width < 64 || args->width > DXGDRM_MAX_DIMENSION ||
+	    args->height < 64 || args->height > DXGDRM_MAX_DIMENSION)
+		return -EINVAL;
+
+	mutex_lock(&dxg->frame_lock);
+	changed = dxg->mode_width != args->width ||
+		  dxg->mode_height != args->height;
+	dxg->mode_width = args->width;
+	dxg->mode_height = args->height;
+	mutex_unlock(&dxg->frame_lock);
+
+	/* The compositor probes the connector again and finds the new mode. */
+	if (changed)
+		drm_kms_helper_hotplug_event(dev);
+	return 0;
+}
+
 static const struct drm_ioctl_desc dxgdrm_ioctls[] = {
 	DRM_IOCTL_DEF_DRV(DXGDRM_FENCE_FROM_EVENTFD, dxgdrm_fence_from_eventfd,
 			  DRM_RENDER_ALLOW),
 	DRM_IOCTL_DEF_DRV(DXGDRM_GET_FRAME, dxgdrm_get_frame_ioctl,
 			  DRM_RENDER_ALLOW),
 	DRM_IOCTL_DEF_DRV(DXGDRM_READ_PIXELS, dxgdrm_read_pixels_ioctl,
+			  DRM_RENDER_ALLOW),
+	DRM_IOCTL_DEF_DRV(DXGDRM_ACK_FRAME, dxgdrm_ack_frame_ioctl,
+			  DRM_RENDER_ALLOW),
+	DRM_IOCTL_DEF_DRV(DXGDRM_SET_MODE, dxgdrm_set_mode_ioctl,
 			  DRM_RENDER_ALLOW),
 };
 
@@ -1096,7 +1273,7 @@ static __poll_t dxgdrm_poll(struct file *filp, struct poll_table_struct *wait)
 	struct dxgdrm_file *priv = file->driver_priv;
 	__poll_t mask = drm_poll(filp, wait);
 
-	if (READ_ONCE(priv->presenter)) {
+	if (test_bit(0, &priv->presenter)) {
 		poll_wait(filp, &dxg->frame_wq, wait);
 		if (READ_ONCE(dxg->seq) != READ_ONCE(priv->seen_seq))
 			mask |= EPOLLIN | EPOLLRDNORM;
@@ -1164,6 +1341,9 @@ static int dxgdrm_probe(struct platform_device *pdev)
 
 	mutex_init(&dxg->frame_lock);
 	init_waitqueue_head(&dxg->frame_wq);
+	timer_setup(&dxg->flip_timer, dxgdrm_flip_timeout, 0);
+	dxg->mode_width = clamp(width, 64U, (unsigned int)DXGDRM_MAX_DIMENSION);
+	dxg->mode_height = clamp(height, 64U, (unsigned int)DXGDRM_MAX_DIMENSION);
 
 	ret = dxgdrm_modeset_init(dxg);
 	if (ret)
@@ -1185,6 +1365,11 @@ static void dxgdrm_remove(struct platform_device *pdev)
 	drm_dev_unregister(&dxg->base);
 	/* Disables the planes, which drops the framebuffers we hold. */
 	drm_atomic_helper_shutdown(&dxg->base);
+
+	spin_lock_irq(&dxg->base.event_lock);
+	dxgdrm_release_flip_locked(dxg, U64_MAX);
+	spin_unlock_irq(&dxg->base.event_lock);
+	timer_delete_sync(&dxg->flip_timer);
 }
 
 static struct platform_driver dxgdrm_platform_driver = {
