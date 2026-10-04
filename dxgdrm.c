@@ -602,10 +602,19 @@ static void dxgdrm_primary_atomic_update(struct drm_plane *plane,
 	struct drm_atomic_helper_damage_iter iter;
 	struct drm_rect clip;
 
+	/* KWin puts the primary plane into every commit, also into one that only
+	 * moves the cursor. The same framebuffer without damage clips is not a
+	 * new frame: a compositor that redraws a buffer in place has to say so
+	 * with clips. */
+	mutex_lock(&dxg->frame_lock);
+	if (fb && fb == dxg->primary_fb &&
+	    !drm_plane_get_damage_clips_count(new_state)) {
+		mutex_unlock(&dxg->frame_lock);
+		return;
+	}
+
 	if (fb)
 		drm_framebuffer_get(fb);
-
-	mutex_lock(&dxg->frame_lock);
 	old_fb = dxg->primary_fb;
 	dxg->primary_fb = fb;
 
