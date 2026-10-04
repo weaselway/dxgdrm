@@ -897,10 +897,34 @@ static void dxgdrm_master_drop(struct drm_device *dev, struct drm_file *file)
  * capability of its own.
  */
 
+/* What poll() needs to know about an open file: whether it is a presenter at
+ * all, and the sequence number DXGDRM_GET_FRAME last left it with. */
+struct dxgdrm_file {
+	bool presenter;
+	u64 seen_seq;
+};
+
+static int dxgdrm_open(struct drm_device *dev, struct drm_file *file)
+{
+	struct dxgdrm_file *priv = kzalloc(sizeof(*priv), GFP_KERNEL);
+
+	if (!priv)
+		return -ENOMEM;
+	file->driver_priv = priv;
+	return 0;
+}
+
+static void dxgdrm_postclose(struct drm_device *dev, struct drm_file *file)
+{
+	kfree(file->driver_priv);
+	file->driver_priv = NULL;
+}
+
 static int dxgdrm_get_frame_ioctl(struct drm_device *dev, void *data,
 				  struct drm_file *file)
 {
 	struct dxgdrm_device *dxg = to_dxgdrm(dev);
+	struct dxgdrm_file *priv = file->driver_priv;
 	struct drm_dxgdrm_get_frame *args = data;
 	struct drm_framebuffer *fb;
 	u64 seen = args->seq;
@@ -910,6 +934,11 @@ static int dxgdrm_get_frame_ioctl(struct drm_device *dev, void *data,
 
 	if (args->timeout_ms)
 		timeout = msecs_to_jiffies(args->timeout_ms);
+
+	/* From here on the file polls readable whenever there is something
+	 * this call has not returned yet. */
+	WRITE_ONCE(priv->seen_seq, seen);
+	WRITE_ONCE(priv->presenter, true);
 
 	ret = wait_event_interruptible_timeout(dxg->frame_wq,
 					       READ_ONCE(dxg->seq) != seen,
@@ -991,6 +1020,7 @@ static int dxgdrm_get_frame_ioctl(struct drm_device *dev, void *data,
 	}
 
 	args->seq = dxg->seq;
+	WRITE_ONCE(priv->seen_seq, dxg->seq);
 	args->primary_seq = dxg->primary_seq;
 	args->cursor_seq = dxg->cursor_seq;
 
@@ -1056,13 +1086,31 @@ static const struct drm_ioctl_desc dxgdrm_ioctls[] = {
 			  DRM_RENDER_ALLOW),
 };
 
+/* A presenter waits for the next commit in poll(), next to its sockets, and
+ * then fetches it with DXGDRM_GET_FRAME. Everyone else gets drm_poll() as it
+ * is: the compositor's page-flip events arrive through it. */
+static __poll_t dxgdrm_poll(struct file *filp, struct poll_table_struct *wait)
+{
+	struct drm_file *file = filp->private_data;
+	struct dxgdrm_device *dxg = to_dxgdrm(file->minor->dev);
+	struct dxgdrm_file *priv = file->driver_priv;
+	__poll_t mask = drm_poll(filp, wait);
+
+	if (READ_ONCE(priv->presenter)) {
+		poll_wait(filp, &dxg->frame_wq, wait);
+		if (READ_ONCE(dxg->seq) != READ_ONCE(priv->seen_seq))
+			mask |= EPOLLIN | EPOLLRDNORM;
+	}
+	return mask;
+}
+
 static const struct file_operations dxgdrm_fops = {
 	.owner		= THIS_MODULE,
 	.open		= drm_open,
 	.release	= drm_release,
 	.unlocked_ioctl	= drm_ioctl,
 	.compat_ioctl	= drm_compat_ioctl,
-	.poll		= drm_poll,
+	.poll		= dxgdrm_poll,
 	.read		= drm_read,
 	.llseek		= noop_llseek,
 	/* Dumb buffers only, see dxgdrm_gem_mmap(). */
@@ -1086,6 +1134,8 @@ static const struct drm_driver dxgdrm_driver = {
 	.driver_features	= DRIVER_RENDER | DRIVER_GEM |
 				  DRIVER_SYNCOBJ | DRIVER_SYNCOBJ_TIMELINE |
 				  DRIVER_MODESET | DRIVER_ATOMIC,
+	.open			= dxgdrm_open,
+	.postclose		= dxgdrm_postclose,
 	.master_set		= dxgdrm_master_set,
 	.master_drop		= dxgdrm_master_drop,
 	.dumb_create		= dxgdrm_dumb_create,

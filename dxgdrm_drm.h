@@ -90,6 +90,10 @@ struct drm_dxgdrm_get_frame {
 	 * @seq: in, the sequence number the caller has already seen (0 at
 	 * first); out, the current one. The call blocks until they differ.
 	 * Every commit that touches either plane bumps it.
+	 *
+	 * After the first call the file also polls readable (POLLIN) while
+	 * the current number differs from the one this call last returned,
+	 * so a presenter can wait in poll() and then fetch without blocking.
 	 */
 	__u64 seq;
 	/** @timeout_ms: in, give up with -ETIME after this long; 0 waits forever. */
