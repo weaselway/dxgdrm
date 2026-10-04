@@ -82,6 +82,7 @@
 #include <drm/drm_ioctl.h>
 #include <drm/drm_modeset_helper_vtables.h>
 #include <drm/drm_prime.h>
+#include <drm/drm_vblank.h>
 #include <drm/drm_probe_helper.h>
 #include <drm/drm_simple_kms_helper.h>
 #include <drm/drm_vma_manager.h>
