@@ -112,6 +112,8 @@ struct dxgdrm_device {
 	struct drm_dxgdrm_rect damage[DXGDRM_MAX_DAMAGE_RECTS];
 	unsigned int num_damage;
 	bool damage_full;
+	/* A client holds DRM master, see DXGDRM_FRAME_OWNED. */
+	bool owned;
 };
 
 #define to_dxgdrm(dev) container_of(dev, struct dxgdrm_device, base)
@@ -846,6 +848,32 @@ static int dxgdrm_modeset_init(struct dxgdrm_device *dxg)
 	return 0;
 }
 
+/* Called by drm core with the master mutex held, whenever a client takes or
+ * loses control of the display: on open and close, on DRM_IOCTL_SET_MASTER and
+ * DROP_MASTER (logind does those on a VT switch). */
+static void dxgdrm_set_owned(struct drm_device *dev, bool owned)
+{
+	struct dxgdrm_device *dxg = to_dxgdrm(dev);
+
+	mutex_lock(&dxg->frame_lock);
+	dxg->owned = owned;
+	dxg->seq++;
+	mutex_unlock(&dxg->frame_lock);
+
+	wake_up_interruptible_all(&dxg->frame_wq);
+}
+
+static void dxgdrm_master_set(struct drm_device *dev, struct drm_file *file,
+			      bool from_open)
+{
+	dxgdrm_set_owned(dev, true);
+}
+
+static void dxgdrm_master_drop(struct drm_device *dev, struct drm_file *file)
+{
+	dxgdrm_set_owned(dev, false);
+}
+
 /*
  * The presenter's side.
  *
@@ -907,6 +935,8 @@ static int dxgdrm_get_frame_ioctl(struct drm_device *dev, void *data,
 		args->pitch = fb->pitches[0];
 	}
 
+	if (dxg->owned)
+		args->flags |= DXGDRM_FRAME_OWNED;
 	if (dxg->damage_full)
 		args->flags |= DXGDRM_FRAME_DAMAGE_FULL;
 	args->num_damage = dxg->num_damage;
@@ -1041,6 +1071,8 @@ static const struct drm_driver dxgdrm_driver = {
 	.driver_features	= DRIVER_RENDER | DRIVER_GEM |
 				  DRIVER_SYNCOBJ | DRIVER_SYNCOBJ_TIMELINE |
 				  DRIVER_MODESET | DRIVER_ATOMIC,
+	.master_set		= dxgdrm_master_set,
+	.master_drop		= dxgdrm_master_drop,
 	.dumb_create		= dxgdrm_dumb_create,
 	.prime_fd_to_handle	= dxgdrm_prime_fd_to_handle,
 	.fops			= &dxgdrm_fops,

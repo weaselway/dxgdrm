@@ -72,6 +72,14 @@ struct drm_dxgdrm_fence_from_eventfd {
 /* It is a D3D12 shared handle, and @cursor_fd is valid; otherwise it is a dumb
  * buffer, to be read with DXGDRM_READ_PIXELS. */
 #define DXGDRM_FRAME_CURSOR_SHARED	(1 << 5)
+/*
+ * A compositor controls the display (it holds DRM master). Without this flag
+ * the planes may still have framebuffers: a compositor leaves its last frame
+ * up when it exits, as on real hardware, so that the next one can take over
+ * without a black frame in between. It is then nobody's frame, and stays until
+ * someone commits again. The flag changing bumps @seq like a commit does.
+ */
+#define DXGDRM_FRAME_OWNED		(1 << 6)
 
 struct drm_dxgdrm_rect {
 	__s32 x1, y1, x2, y2;
