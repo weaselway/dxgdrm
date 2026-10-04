@@ -603,9 +603,15 @@ static void dxgdrm_primary_atomic_update(struct drm_plane *plane,
 	struct drm_rect clip;
 
 	/* KWin puts the primary plane into every commit, also into one that only
-	 * moves the cursor. The same framebuffer without damage clips is not a
-	 * new frame: a compositor that redraws a buffer in place has to say so
-	 * with clips. */
+	 * moves the cursor, so the same framebuffer again is not taken as a new
+	 * frame. That is right for a compositor that flips between buffers and
+	 * never draws into the one on screen, which is what mutter and KWin do.
+	 *
+	 * It is wrong for a client that draws in place and commits the same
+	 * framebuffer again to say so. Such a client is only seen if it sets
+	 * FB_DAMAGE_CLIPS. The proper signal for drawing in place is
+	 * DRM_IOCTL_MODE_DIRTYFB, which this driver does not implement (the
+	 * framebuffers have no .dirty); neither mutter nor KWin uses it. */
 	mutex_lock(&dxg->frame_lock);
 	if (fb && fb == dxg->primary_fb &&
 	    !drm_plane_get_damage_clips_count(new_state)) {
