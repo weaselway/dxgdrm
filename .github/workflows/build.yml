@@ -22,7 +22,7 @@ jobs:
   # The matrix has to exist before the job that uses it, and `ls conf` is not
   # something a matrix expression can do -- hence this.
   configs:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     outputs:
       matrix: ${{ steps.list.outputs.matrix }}
     steps:
@@ -34,7 +34,7 @@ jobs:
 
   build:
     needs: configs
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.configs.outputs.matrix) }}
