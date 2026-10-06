@@ -208,6 +208,19 @@ cp "${KERNEL_SRC}/vmlinux.symvers" "${KERNEL_SRC}/Module.symvers"
 echo "build-kernel-headers.sh: preparing module build support"
 "${KMAKE[@]}" modules_prepare
 
+# From 6.18.40.1 on the WSL kernel is built without DRM core, which dxgdrm
+# links against. It is built here as modules instead -- hdmi.ko, drm.ko and
+# drm_kms_helper.ko, left where kbuild puts them and loaded ahead of dxgdrm.
+# The patch is checked in reverse first so that a rerun does not apply it twice.
+if grep -q '^# CONFIG_DRM is not set$' "${KCONFIG_SRC}"; then
+  echo "build-kernel-headers.sh: no DRM core in this kernel, building it as modules"
+  DRM_PATCH="${SCRIPT_DIR}/kernel-drm-as-modules.patch"
+  if ! git -C "${KERNEL_SRC}" apply --reverse --check "${DRM_PATCH}" 2>/dev/null; then
+    git -C "${KERNEL_SRC}" apply "${DRM_PATCH}"
+  fi
+  (cd "${KERNEL_SRC}" && "${SCRIPT_DIR}/build-drm-modules.sh" "${KMAKE[@]:1}")
+fi
+
 # Sanity-check the thing that silently breaks everything downstream.
 built_release="$(cat "${KERNEL_SRC}/include/config/kernel.release")"
 if [ "${built_release}" != "${KERNEL_RELEASE}" ]; then

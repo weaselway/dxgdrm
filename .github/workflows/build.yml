@@ -97,5 +97,10 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: dxgdrm-${{ steps.kernel.outputs.release }}
-          path: dxgdrm.ko
+          # The DRM core modules only exist for kernels built without it.
+          path: |
+            dxgdrm.ko
+            build/wsl-kernel/drivers/video/hdmi.ko
+            build/wsl-kernel/drivers/gpu/drm/drm.ko
+            build/wsl-kernel/drivers/gpu/drm/drm_kms_helper.ko
           if-no-files-found: error

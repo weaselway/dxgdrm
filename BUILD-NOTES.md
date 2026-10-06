@@ -92,6 +92,36 @@ flag.
 The other way out, independent of all this, is to boot the `vmlinux` that
 `build-kernel-headers.sh` just built, via `kernel=` in `.wslconfig`.
 
+## Kernels without DRM core
+
+Up to `6.18.35.2` the WSL kernel had `CONFIG_DRM=y`. From `6.18.40.1` on it is
+unset, and nothing in WSL's own module image provides it either, so `dxgdrm`
+has nothing to link against. The build makes up for that by building DRM core
+from the same kernel tree as modules — `hdmi.ko`, `drm.ko` and
+`drm_kms_helper.ko` — which are loaded ahead of `dxgdrm.ko`.
+[build-drm-modules.sh](build-drm-modules.sh) does it, for both the container
+build and the flake, whenever the kernel's config has `CONFIG_DRM` unset.
+
+The constraint is that `vmlinux` must stay what WSL ships: the modules are
+loaded into Microsoft's kernel, not into one built here. Enabling DRM in the
+config would normally break that in one place, because `DRM` selects `HDMI`,
+which is a bool and puts `hdmi.o` into `vmlinux`.
+[kernel-drm-as-modules.patch](kernel-drm-as-modules.patch) makes it a tristate,
+so that it follows `DRM=m` into a module of its own, and gives
+`DRM_KMS_HELPER` a prompt, since only an in-tree driver could select it
+otherwise. With that, enabling `DRM=m` changes no option outside DRM apart from
+`HDMI=m`, and the script fails if it ever does.
+
+`vmlinux` is built first, from the stock config, and is not rebuilt afterwards:
+the three modules are built as single targets, which also avoids building the
+several hundred modules the stock config enables. `DRM_FBDEV_EMULATION` is
+turned off because it would select a built-in console option.
+
+That the stock kernel's exports are unaffected was checked once for `6.18.40.1`
+by building `vmlinux` both ways: all 11526 exported symbols kept their CRC, and
+the only additions were the `hdmi_*` functions, three of which `drm.ko`
+imports.
+
 ## What the container setup is doing
 
 It bind-mounts the repo, so `./build/wsl-kernel` persists across runs, and
@@ -166,6 +196,11 @@ So `modprobe dxgdrm` by name cannot be the deployment story: the one directory
 it searches is the one that does not keep anything. `modprobe` given a path
 containing a slash loads that file directly instead, which is what both the
 `modprobe ./dxgdrm.ko` in [README.md](README.md) and the weaselway repo's
-`prep-session.sh` do. It skips
-`modules.dep`, which costs nothing — `dxgdrm` links only against DRM core, and
-`CONFIG_DRM=y`.
+`prep-session.sh` used to do. It skips
+`modules.dep`, which costs nothing while `dxgdrm` links only against a built-in
+DRM core.
+
+On kernels where DRM core is a set of modules too, the order matters, and the
+flake's package carries its own `modules.dep` for that: it is laid out as
+`lib/modules/<release>/`, and `modprobe -d <package> dxgdrm` uses it as the
+module root in place of `/`.

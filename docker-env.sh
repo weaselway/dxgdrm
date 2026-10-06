@@ -74,6 +74,12 @@ docker-env.sh: dxgdrm.ko built. Load it with:
   sudo udevadm trigger --subsystem-match=drm
   sudo udevadm settle
 
+On a kernel built without DRM core (6.18.40.1 onwards) load that first:
+
+  sudo modprobe ./build/wsl-kernel/drivers/video/hdmi.ko
+  sudo modprobe ./build/wsl-kernel/drivers/gpu/drm/drm.ko
+  sudo modprobe ./build/wsl-kernel/drivers/gpu/drm/drm_kms_helper.ko
+
 The module is loaded out of this directory rather than installed first: on WSL
 /lib/modules is an overlay that WSL itself mounts, and anything written there
 is gone at the next `wsl --shutdown`. See the comment in the Makefile.

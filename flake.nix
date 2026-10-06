@@ -18,6 +18,7 @@
       # microsoft/WSL2-Linux-Kernel tag, see WEASELWAY.md.
       kernels = {
         "6.18.33.2-microsoft-standard-WSL2" = "sha256-5zGJZdKvTijB5guP05DRmeTh1vXgbX76y0qIUwbumX0=";
+        "6.18.40.1-microsoft-standard-WSL2" = "sha256-YMqq3RzXNPibwzckYboDChp2IrUQYauX7Zc0nE+CgMY=";
       };
 
       # The compiler the shipped WSL kernels are built with, the same one
@@ -141,6 +142,11 @@
             let
               kernelVersion = builtins.head (lib.splitString "-" kernelRelease);
               config = ./conf + "/kernel-${kernelRelease}.conf";
+              # From 6.18.40.1 on the WSL kernel has no DRM core, so it is
+              # built here as modules and shipped with dxgdrm. (lib.hasInfix
+              # overflows the stack on a file this size.)
+              needsDrm =
+                builtins.length (builtins.split "\n# CONFIG_DRM is not set\n" (builtins.readFile config)) > 1;
             in
             pkgs.stdenv.mkDerivation (
               kbuildEnv
@@ -161,6 +167,8 @@
                 # get in the way.
                 hardeningDisable = [ "all" ];
                 enableParallelBuilding = true;
+
+                patches = lib.optional needsDrm ./kernel-drm-as-modules.patch;
 
                 postPatch = ''
                   patchShebangs scripts tools
@@ -204,10 +212,17 @@
                   "modules_prepare"
                 ];
 
+                # The DRM modules come after vmlinux and leave it alone; their
+                # modpost run rewrites Module.symvers to include them.
+                postBuild = ''
+                  cp vmlinux.symvers Module.symvers
+                  ${lib.optionalString needsDrm ''
+                    bash ${./build-drm-modules.sh} $makeFlags -j$NIX_BUILD_CORES
+                  ''}
+                '';
+
                 installPhase = ''
                   runHook preInstall
-
-                  cp vmlinux.symvers Module.symvers
 
                   built_release="$(cat include/config/kernel.release)"
                   if [ "$built_release" != "${kernelRelease}" ]; then
@@ -265,11 +280,23 @@
                 # (modprobe does not need it; .BTF stays), the strings get
                 # their store hash blanked, and disallowedReferences keeps it
                 # that way.
+                #
+                # The DRM core modules ride along where the kernel tree built
+                # them, and depmod records the order they load in, so the
+                # loader is `modprobe -d <this package> dxgdrm`.
                 installPhase = ''
                   runHook preInstall
-                  ${crossCompile}objcopy --strip-debug dxgdrm.ko
-                  remove-references-to -t ${kernelDev} dxgdrm.ko
-                  install -Dm644 dxgdrm.ko $out/lib/modules/${kernelRelease}/extra/dxgdrm.ko
+                  for ko in drivers/video/hdmi.ko drivers/gpu/drm/drm.ko drivers/gpu/drm/drm_kms_helper.ko; do
+                    if [ -e ${kernelDev}/$ko ]; then
+                      install -m644 ${kernelDev}/$ko .
+                    fi
+                  done
+                  for ko in *.ko; do
+                    ${crossCompile}objcopy --strip-debug $ko
+                    remove-references-to -t ${kernelDev} $ko
+                    install -Dm644 $ko $out/lib/modules/${kernelRelease}/extra/$ko
+                  done
+                  depmod -b $out ${kernelRelease}
                   install -Dm644 99-dxgdrm.rules $out/lib/udev/rules.d/99-dxgdrm.rules
                   runHook postInstall
                 '';

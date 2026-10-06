@@ -1,0 +1,52 @@
+Let DRM core be built as modules without touching vmlinux.
+
+Since linux-msft-wsl-6.18.40.1 the WSL kernel is built with CONFIG_DRM unset,
+so dxgdrm has to bring drm.ko and drm_kms_helper.ko along. Two things stand in
+the way of building them against the stock config:
+
+- DRM selects HDMI, a bool, which would put hdmi.o into vmlinux -- a vmlinux
+  the running kernel is not. As a tristate it follows DRM=m into hdmi.ko.
+- DRM_KMS_HELPER has no prompt and is only ever selected by a driver. dxgdrm
+  is out of tree and cannot select it, so give it a prompt.
+
+Not for upstream; applied by flake.nix and build-kernel-headers.sh.
+
+--- a/drivers/gpu/drm/Kconfig
++++ b/drivers/gpu/drm/Kconfig
+@@ -43,7 +43,7 @@
+ 	depends on DRM
+ 
+ config DRM_KMS_HELPER
+-	tristate
++	tristate "KMS helpers"
+ 	depends on DRM
+ 	select FB_CORE if DRM_FBDEV_EMULATION
+ 	help
+--- a/drivers/video/hdmi.c
++++ b/drivers/video/hdmi.c
+@@ -26,6 +26,7 @@
+ #include <linux/bug.h>
+ #include <linux/errno.h>
+ #include <linux/export.h>
++#include <linux/module.h>
+ #include <linux/hdmi.h>
+ #include <linux/string.h>
+ #include <linux/device.h>
+@@ -1919,3 +1920,6 @@
+ 	return ret;
+ }
+ EXPORT_SYMBOL(hdmi_infoframe_unpack);
++
++MODULE_DESCRIPTION("HDMI infoframe helpers");
++MODULE_LICENSE("Dual MIT/GPL");
+--- a/drivers/video/Kconfig
++++ b/drivers/video/Kconfig
+@@ -57,7 +57,7 @@
+ 	bool
+ 
+ config HDMI
+-	bool
++	tristate
+ 
+ endif # HAS_IOMEM
+ 

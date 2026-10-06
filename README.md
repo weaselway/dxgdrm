@@ -75,6 +75,16 @@ sudo udevadm trigger --subsystem-match=drm
 sudo udevadm settle
 ```
 
+From `6.18.40.1` on the WSL kernel is built without DRM core. The build then
+produces it as three more modules, which have to be loaded before `dxgdrm.ko`,
+in this order:
+
+```sh
+sudo modprobe ./build/wsl-kernel/drivers/video/hdmi.ko
+sudo modprobe ./build/wsl-kernel/drivers/gpu/drm/drm.ko
+sudo modprobe ./build/wsl-kernel/drivers/gpu/drm/drm_kms_helper.ko
+```
+
 Plus the udev rules, once — `/etc/udev/rules.d` is on the distro's own disk,
 so this survives a reboot and does not need repeating:
 
