@@ -43,8 +43,9 @@
  * it prefers i915/amdgpu/virtio_gpu and otherwise takes the first survivor with
  * a warning. Mesa cares more: the name is what its pipe loader matches drivers
  * on. The weaselway mesa has a "dxgdrm" entry there that creates the d3d12
- * screen (which reaches the GPU through /dev/dxg and uses this node only for
- * fences), so gbm and EGL on this node end up on d3d12 rather than falling
+ * screen (which reaches the GPU through /dev/dxg and uses this node for fences
+ * and, on the primary node, to import scanout buffers as GEM handles), so gbm
+ * and EGL on this node end up on d3d12 rather than falling
  * back to kmsro, zink or software. "d3d12" itself would be wrong: that name
  * would send an unpatched mesa, and the installed d3d12_dri.so, down paths
  * that expect a d3d12 device behind the fd.
@@ -1017,8 +1018,8 @@ static void dxgdrm_master_drop(struct drm_device *dev, struct drm_file *file)
 /*
  * The presenter's side.
  *
- * Spike shortcut: both ioctls are allowed on the render node, so anything that
- * can render can also read the screen. The real thing wants a node or a
+ * Spike shortcut: the presenter's ioctls are allowed on the render node, so
+ * anything that can render can also read the screen. The real thing wants a node or a
  * capability of its own.
  */
 

@@ -48,8 +48,8 @@ struct drm_dxgdrm_fence_from_eventfd {
  *
  * dxgdrm has one CRTC with a primary and a cursor plane and nothing behind
  * them. Whatever the compositor commits is handed to a userspace presenter
- * through the two ioctls below, which is what reads the frame back and gets it
- * to Windows.
+ * through the ioctls below (GET_FRAME, READ_PIXELS, ACK_FRAME, SET_MODE),
+ * which is what reads the frame back and gets it to Windows.
  *
  * A primary framebuffer is one of two things. A d3d12 buffer is a D3D12 shared
  * handle that the compositor imported with DRM_IOCTL_PRIME_FD_TO_HANDLE (the
