@@ -15,7 +15,7 @@ picks the gallium driver by the name.
 - The weaselway Mesa has a `dxgdrm` entry in its pipe loader that creates the
   d3d12 screen. That screen reaches the GPU through `/dev/dxg`. It uses this
   node for fences and, on the primary node, to import scanout buffers as GEM
-  handles for the compositor (mesa `07d0f7ed524`).
+  handles for the compositor (mesa wsl-adr 0006 and 0008).
 - `d3d12` was rejected: it would send an unpatched Mesa, and the installed
   `d3d12_dri.so`, down paths that expect a d3d12 device behind the fd.
 
