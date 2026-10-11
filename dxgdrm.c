@@ -119,9 +119,9 @@ struct dxgdrm_device {
 	/* A client holds DRM master, see DXGDRM_FRAME_OWNED. */
 	bool owned;
 
-	/* The size of the one mode the connector offers, see
+	/* The size and refresh rate of the one mode the connector offers, see
 	 * dxgdrm_set_mode_ioctl(). Under frame_lock. */
-	unsigned int mode_width, mode_height;
+	unsigned int mode_width, mode_height, mode_refresh_mhz;
 	struct drm_property *hotplug_mode_update;
 
 	/*
@@ -553,7 +553,7 @@ static int dxgdrm_prime_fd_to_handle(struct drm_device *dev,
  * presenter has taken that frame (DXGDRM_ACK_FRAME), which is what holds the
  * compositor to the rate the frames can be read back at; every other commit
  * completes right away, and the compositor's own frame clock limits it to the
- * mode's refresh rate.
+ * mode's refresh rate, which the presenter sets to that of the client's monitor.
  */
 
 static unsigned int width = 1920;
@@ -564,12 +564,22 @@ static unsigned int height = 1080;
 module_param(height, uint, 0444);
 MODULE_PARM_DESC(height, "Height of the virtual display's mode until a presenter sets one");
 
+static unsigned int refresh = 60;
+module_param(refresh, uint, 0444);
+MODULE_PARM_DESC(refresh, "Refresh rate in Hz of the virtual display's mode until a presenter sets one");
+
 static unsigned int flip_timeout_ms = 100;
 module_param(flip_timeout_ms, uint, 0644);
 MODULE_PARM_DESC(flip_timeout_ms,
 		 "Complete a page flip after this many ms if the presenter has not acknowledged the frame (0 = do not wait for it)");
 
 #define DXGDRM_MAX_DIMENSION	8192
+#define DXGDRM_MAX_REFRESH_MHZ	1000000
+
+static unsigned int dxgdrm_default_refresh_mhz(void)
+{
+	return clamp(refresh, 1U, DXGDRM_MAX_REFRESH_MHZ / 1000) * 1000;
+}
 #define DXGDRM_CURSOR_SIZE	256
 
 static const u32 dxgdrm_primary_formats[] = {
@@ -866,11 +876,12 @@ static int dxgdrm_connector_get_modes(struct drm_connector *connector)
 {
 	struct dxgdrm_device *dxg = to_dxgdrm(connector->dev);
 	struct drm_display_mode *mode;
-	unsigned int w, h;
+	unsigned int w, h, mhz;
 
 	mutex_lock(&dxg->frame_lock);
 	w = dxg->mode_width;
 	h = dxg->mode_height;
+	mhz = dxg->mode_refresh_mhz;
 	mutex_unlock(&dxg->frame_lock);
 
 	mode = drm_mode_create(connector->dev);
@@ -885,7 +896,9 @@ static int dxgdrm_connector_get_modes(struct drm_connector *connector)
 	mode->vsync_start = h + 3;
 	mode->vsync_end = h + 3 + 5;
 	mode->vtotal = h + 31;
-	mode->clock = DIV_ROUND_CLOSEST(mode->htotal * mode->vtotal * 60, 1000);
+	/* kHz; 64 bits, the product overflows 32 at large sizes and rates. */
+	mode->clock = DIV_ROUND_CLOSEST_ULL((u64)mode->htotal * mode->vtotal * mhz,
+					    1000000);
 	mode->type = DRM_MODE_TYPE_PREFERRED | DRM_MODE_TYPE_DRIVER;
 	drm_mode_set_name(mode);
 	drm_mode_probed_add(connector, mode);
@@ -1234,17 +1247,23 @@ static int dxgdrm_set_mode_ioctl(struct drm_device *dev, void *data,
 {
 	struct dxgdrm_device *dxg = to_dxgdrm(dev);
 	struct drm_dxgdrm_set_mode *args = data;
+	unsigned int mhz = args->refresh_mhz;
 	bool changed;
 
 	if (args->width < 64 || args->width > DXGDRM_MAX_DIMENSION ||
-	    args->height < 64 || args->height > DXGDRM_MAX_DIMENSION)
+	    args->height < 64 || args->height > DXGDRM_MAX_DIMENSION ||
+	    (mhz && (mhz < 1000 || mhz > DXGDRM_MAX_REFRESH_MHZ)))
 		return -EINVAL;
+	if (!mhz)
+		mhz = dxgdrm_default_refresh_mhz();
 
 	mutex_lock(&dxg->frame_lock);
 	changed = dxg->mode_width != args->width ||
-		  dxg->mode_height != args->height;
+		  dxg->mode_height != args->height ||
+		  dxg->mode_refresh_mhz != mhz;
 	dxg->mode_width = args->width;
 	dxg->mode_height = args->height;
+	dxg->mode_refresh_mhz = mhz;
 	mutex_unlock(&dxg->frame_lock);
 
 	/* The compositor probes the connector again and finds the new mode. */
@@ -1347,6 +1366,7 @@ static int dxgdrm_probe(struct platform_device *pdev)
 	timer_setup(&dxg->flip_timer, dxgdrm_flip_timeout, 0);
 	dxg->mode_width = clamp(width, 64U, (unsigned int)DXGDRM_MAX_DIMENSION);
 	dxg->mode_height = clamp(height, 64U, (unsigned int)DXGDRM_MAX_DIMENSION);
+	dxg->mode_refresh_mhz = dxgdrm_default_refresh_mhz();
 
 	ret = dxgdrm_modeset_init(dxg);
 	if (ret)

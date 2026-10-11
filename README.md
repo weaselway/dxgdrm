@@ -51,8 +51,8 @@ Mesa has to know the node: the weaselway mesa has a `dxgdrm` entry in its pipe
 loader that creates the d3d12 screen. An unpatched Mesa gets software rendering
 here.
 
-Module parameters: `width` and `height` (the mode until a presenter sets one,
-1920x1080), `flip_timeout_ms` (complete a page flip after this long if the
+Module parameters: `width`, `height` and `refresh` (the mode until a presenter
+sets one, 1920x1080 at 60 Hz), `flip_timeout_ms` (complete a page flip after this long if the
 presenter has not acknowledged it, 100), and `fence_timeout_ms` (10 s).
 
 The header comment in [dxgdrm.c](dxgdrm.c) has the full rationale, including

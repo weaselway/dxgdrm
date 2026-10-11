@@ -29,6 +29,7 @@ and of weaselwayd are in weaselway's `docs/adr`, and are referred to as
 | [0015](0015-cursor-plane-behaviour.md) | Hotspot properties without `DRIVER_CURSOR_HOTSPOT`, and only new frames count | Accepted |
 | [0016](0016-udev-mode-only.md) | The udev rule sets mode 0666 on both nodes, and no group | Accepted |
 | [0017](0017-drm-core-as-modules.md) | DRM core is built as modules for kernels without it | Accepted |
+| [0018](0018-refresh-rate-from-the-presenter.md) | The presenter sets the mode's refresh rate | Accepted |
 
 ## Known risks
 

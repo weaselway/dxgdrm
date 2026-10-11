@@ -192,6 +192,15 @@ struct drm_dxgdrm_ack_frame {
 struct drm_dxgdrm_set_mode {
 	__u32 width;
 	__u32 height;
+	/**
+	 * @refresh_mhz: the mode's refresh rate in millihertz, 1 to 1000 Hz;
+	 * 0 for the module's refresh parameter. Added after the first
+	 * release; DRM zero-extends shorter structs, so callers built against
+	 * the 8-byte version get the default. The compositor's frame clock
+	 * runs at this rate; frames are still held to the presenter's pace by
+	 * DXGDRM_ACK_FRAME.
+	 */
+	__u32 refresh_mhz;
 };
 
 #define DRM_DXGDRM_FENCE_FROM_EVENTFD	0x00
