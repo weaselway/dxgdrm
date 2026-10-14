@@ -74,7 +74,8 @@ docker-env.sh: dxgdrm.ko built. Load it with:
   sudo udevadm trigger --subsystem-match=drm
   sudo udevadm settle
 
-On a kernel built without DRM core (6.18.40.1 onwards) load that first:
+On a kernel built without DRM core (6.18.40.1) load that first, without KMS
+helpers (6.18.54.1) only drm_kms_helper.ko:
 
   sudo modprobe ./build/wsl-kernel/drivers/video/hdmi.ko
   sudo modprobe ./build/wsl-kernel/drivers/gpu/drm/drm.ko

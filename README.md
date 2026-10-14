@@ -75,9 +75,10 @@ sudo udevadm trigger --subsystem-match=drm
 sudo udevadm settle
 ```
 
-From `6.18.40.1` on the WSL kernel is built without DRM core. The build then
-produces it as three more modules, which have to be loaded before `dxgdrm.ko`,
-in this order:
+`6.18.40.1` is built without DRM core, `6.18.54.1` with DRM core but without
+the KMS helpers. The build then produces what is missing as modules (all three
+for 40.1, only `drm_kms_helper.ko` for 54.1), which have to be loaded before
+`dxgdrm.ko`, in this order:
 
 ```sh
 sudo modprobe ./build/wsl-kernel/drivers/video/hdmi.ko

@@ -23,6 +23,9 @@ changes it, because `DRM` selects `HDMI`, a bool that puts `hdmi.o` into
   it would select a built-in console option.
 - The script fails if enabling `DRM=m` changes any option outside DRM other
   than `HDMI=m`.
+- A kernel with `CONFIG_DRM=y` but no `CONFIG_DRM_KMS_HELPER` (`6.18.54.1`)
+  gets only `drm_kms_helper.ko`. DRM core is in its `vmlinux`, so the script
+  fails if anything but `DRM_KMS_HELPER=m` changes.
 - The package installs them next to `dxgdrm.ko` and runs `depmod`, so
   `modprobe -d <package> dxgdrm` loads all four in order (see 0005).
 

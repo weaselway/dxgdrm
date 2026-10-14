@@ -19,6 +19,7 @@
       kernels = {
         "6.18.33.2-microsoft-standard-WSL2" = "sha256-5zGJZdKvTijB5guP05DRmeTh1vXgbX76y0qIUwbumX0=";
         "6.18.40.1-microsoft-standard-WSL2" = "sha256-YMqq3RzXNPibwzckYboDChp2IrUQYauX7Zc0nE+CgMY=";
+        "6.18.54.1-microsoft-standard-WSL2" = "sha256-iN6eWKJV20yGn2TPtLFxA4mI52G0dcO2zEOMJV1lfcs=";
       };
 
       # The compiler the shipped WSL kernels are built with, the same one
@@ -142,11 +143,11 @@
             let
               kernelVersion = builtins.head (lib.splitString "-" kernelRelease);
               config = ./conf + "/kernel-${kernelRelease}.conf";
-              # From 6.18.40.1 on the WSL kernel has no DRM core, so it is
-              # built here as modules and shipped with dxgdrm. (lib.hasInfix
-              # overflows the stack on a file this size.)
-              needsDrm =
-                builtins.length (builtins.split "\n# CONFIG_DRM is not set\n" (builtins.readFile config)) > 1;
+              # 6.18.40.1 has no DRM core, 6.18.54.1 no KMS helpers. What is
+              # missing is built here as modules and shipped with dxgdrm.
+              # (lib.hasInfix overflows the stack on a file this size.)
+              has = re: builtins.length (builtins.split re (builtins.readFile config)) > 1;
+              needsDrm = has "\n# CONFIG_DRM is not set\n" || !has "\nCONFIG_DRM_KMS_HELPER=";
             in
             pkgs.stdenv.mkDerivation (
               kbuildEnv
@@ -186,12 +187,19 @@
                 #     -gz=zstd probe fails. Debug info compression only.
                 # Anything else means the CRCs may not match either, so stop
                 # here rather than after the vmlinux build.
+                #
+                # Only set values are compared, sorted: a config taken from the
+                # tree (add-kernel.sh) is not olddefconfig'd, so its order and
+                # "is not set" lines differ from /proc/config.gz, its values not.
                 configurePhase = ''
                   runHook preConfigure
                   cp ${config} .config
                   make $makeFlags olddefconfig
                   ${lib.optionalString haveKgcc ''
-                    if ! diff -u -I '^# Linux/' -I '^CONFIG_PAHOLE_VERSION=' -I '^CONFIG_CC_CAN_LINK=' -I '^# CONFIG_DEBUG_INFO_COMPRESSED_ZSTD is not set$' ${config} .config; then
+                    values() {
+                      grep '^CONFIG_' "$1" | grep -vE '^CONFIG_(PAHOLE_VERSION|CC_CAN_LINK|DEBUG_INFO_COMPRESSED_ZSTD)=' | sort
+                    }
+                    if ! diff -u <(values ${config}) <(values .config); then
                       echo "the prepared .config differs from ${config}; the module would not load" >&2
                       exit 1
                     fi

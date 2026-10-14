@@ -102,6 +102,13 @@ from the same kernel tree as modules — `hdmi.ko`, `drm.ko` and
 [build-drm-modules.sh](build-drm-modules.sh) does it, for both the container
 build and the flake, whenever the kernel's config has `CONFIG_DRM` unset.
 
+`6.18.54.1` brought `CONFIG_DRM=y` back (for vgem), but without
+`CONFIG_DRM_KMS_HELPER`. There only `drm_kms_helper.ko` is built, and the
+config may change in nothing but `DRM_KMS_HELPER=m`: DRM core is in `vmlinux`,
+so any other DRM option would compile code for a kernel WSL does not ship.
+A symbol the module needs that the stock `vmlinux` does not export fails
+modpost.
+
 The constraint is that `vmlinux` must stay what WSL ships: the modules are
 loaded into Microsoft's kernel, not into one built here. Enabling DRM in the
 config would normally break that in one place, because `DRM` selects `HDMI`,

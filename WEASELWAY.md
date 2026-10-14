@@ -41,9 +41,10 @@ nix build                    # dxgdrm-all: one module per kernel in conf/
   `PAHOLE_VERSION`, `CC_CAN_LINK` (kgcc has no libc) and
   `DEBUG_INFO_COMPRESSED_ZSTD`. Any other difference means a different
   toolchain, and it is caught before the long vmlinux build.
-- **DRM core.** A kernel whose config has `CONFIG_DRM` unset (`6.18.40.1`
-  onwards) gets `hdmi.ko`, `drm.ko` and `drm_kms_helper.ko` built in its
-  prepared tree, after `vmlinux` and without rebuilding it, see
+- **DRM core.** A kernel whose config has `CONFIG_DRM` unset (`6.18.40.1`)
+  gets `hdmi.ko`, `drm.ko` and `drm_kms_helper.ko` built in its prepared
+  tree, after `vmlinux` and without rebuilding it. One with `CONFIG_DRM=y` but
+  no `CONFIG_DRM_KMS_HELPER` (`6.18.54.1`) gets only `drm_kms_helper.ko`, see
   [BUILD-NOTES.md](BUILD-NOTES.md#kernels-without-drm-core). `packages.dxgdrm`
   installs them next to `dxgdrm.ko` and runs `depmod`, so the package is a
   module root of its own: `modprobe -d result dxgdrm` loads all four in order.
@@ -54,12 +55,20 @@ nix build                    # dxgdrm-all: one module per kernel in conf/
 
 ## Targeting another kernel release
 
-Add the captured config to `conf/` as `kernel-<release>.conf`, then add
-`"<release>" = "<hash>";` to `kernels` in [flake.nix](flake.nix). Get the hash
-with `nix flake prefetch github:microsoft/WSL2-Linux-Kernel/linux-msft-wsl-<version>`.
+Run [add-kernel.sh](add-kernel.sh): with no argument it takes the newest
+`linux-msft-wsl-*` tag, otherwise a version or release (`./add-kernel.sh
+"$(uname -r)"` inside WSL). It copies the tag's in-tree
+`arch/x86/configs/config-wsl` to `conf/kernel-<release>.conf` and adds
+`"<release>" = "<hash>";` to `kernels` in [flake.nix](flake.nix). New files
+must be `git add`ed before the flake sees them.
+
+The in-tree config has the same values as the shipped kernel's
+`/proc/config.gz` (checked for 6.18.40.1), only its order and `is not set`
+lines differ, so the config check compares set values only. A config captured
+from `/proc/config.gz` works as well.
 `dxgdrm-all` then carries a module for that release as well, and the loader
-picks the one matching `uname -r`. Whether the release needs DRM core built as
-modules is read from its config.
+picks the one matching `uname -r`. Whether the release needs DRM core or the KMS
+helpers built as modules is read from its config.
 
 ## Loading
 

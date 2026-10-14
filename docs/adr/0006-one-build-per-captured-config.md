@@ -28,9 +28,11 @@ the release string, and the old module is rejected. CI runners are not WSL, so
 ## Consequences
 
 - Adding a kernel means adding its config to `conf/` and its hash to
-  `kernels`. Nothing else names a kernel version.
+  `kernels`. Nothing else names a kernel version. `add-kernel.sh` does both,
+  taking the config from the tag's in-tree `config-wsl`, whose values match
+  the shipped kernel's.
 - The loader picks the module matching `uname -r`, and a kernel without a
   build is a missing file, not a vermagic error.
-- Supported today: `6.18.33.2-microsoft-standard-WSL2` and
-  `6.18.40.1-microsoft-standard-WSL2`, x86_64 only. A custom kernel set with
+- Supported today: `6.18.33.2`, `6.18.40.1` and `6.18.54.1`
+  (`-microsoft-standard-WSL2`), x86_64 only. A custom kernel set with
   `kernel=` in `.wslconfig` is not covered.
