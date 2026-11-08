@@ -448,8 +448,17 @@ static int dxgdrm_gem_mmap(struct drm_gem_object *obj,
 	return 0;
 }
 
+/* Nothing here has pages: a shared handle is opaque and dumb buffers are
+ * vmalloc memory. Saying so keeps drm_gem_map_dma_buf() from WARNing when
+ * another device attaches to one of our dma-bufs. */
+static struct sg_table *dxgdrm_gem_get_sg_table(struct drm_gem_object *obj)
+{
+	return ERR_PTR(-EOPNOTSUPP);
+}
+
 static const struct drm_gem_object_funcs dxgdrm_gem_funcs = {
 	.free	= dxgdrm_gem_free,
+	.get_sg_table = dxgdrm_gem_get_sg_table,
 	.mmap	= dxgdrm_gem_mmap,
 	.vm_ops	= &dxgdrm_gem_vm_ops,
 };
@@ -547,6 +556,49 @@ static int dxgdrm_prime_fd_to_handle(struct drm_device *dev,
 	ret = drm_gem_handle_create(file_priv, &gem->base, handle);
 	drm_gem_object_put(&gem->base);
 	return ret;
+}
+
+/*
+ * Such an object exports as a real dma-buf through core PRIME, so a producer
+ * can put its fences in the reservation object and a compositor can poll for
+ * them. A D3D12 device cannot open that dma-buf, though; this gives the
+ * importer the shared handle inside. It takes fds, not GEM handles, so it
+ * never touches a handle the caller's compositor holds for the same object.
+ */
+static int dxgdrm_dmabuf_to_shared_ioctl(struct drm_device *dev, void *data,
+					 struct drm_file *file)
+{
+	struct drm_dxgdrm_dmabuf_to_shared *args = data;
+	struct drm_gem_object *obj;
+	struct dma_buf *dmabuf;
+	struct dxgdrm_gem *gem;
+	int fd;
+
+	dmabuf = dma_buf_get(args->dmabuf_fd);
+	if (IS_ERR(dmabuf))
+		return -EINVAL;
+
+	/* Our own dma-buf gives back its object; we have no
+	 * gem_prime_import_sg_table, so anything else is -EINVAL. */
+	obj = drm_gem_prime_import(dev, dmabuf);
+	dma_buf_put(dmabuf);
+	if (IS_ERR(obj))
+		return -EINVAL;
+
+	gem = to_dxgdrm_gem(obj);
+	if (!gem->shared) {
+		fd = -EINVAL;
+		goto out;
+	}
+
+	fd = get_unused_fd_flags(O_CLOEXEC);
+	if (fd < 0)
+		goto out;
+	fd_install(fd, get_file(gem->shared));
+	args->shared_fd = fd;
+out:
+	drm_gem_object_put(obj);
+	return fd < 0 ? fd : 0;
 }
 
 /*
@@ -1370,6 +1422,8 @@ static const struct drm_ioctl_desc dxgdrm_ioctls[] = {
 			  DRM_RENDER_ALLOW),
 	DRM_IOCTL_DEF_DRV(DXGDRM_SHIFT_VBLANK, dxgdrm_shift_vblank_ioctl,
 			  DRM_RENDER_ALLOW),
+	DRM_IOCTL_DEF_DRV(DXGDRM_DMABUF_TO_SHARED, dxgdrm_dmabuf_to_shared_ioctl,
+			  DRM_RENDER_ALLOW),
 };
 
 /* A presenter waits for the next commit in poll(), next to its sockets, and
@@ -1432,7 +1486,8 @@ static const struct drm_driver dxgdrm_driver = {
 	.name			= DRIVER_NAME,
 	.desc			= DRIVER_DESC,
 	.major			= 1,
-	.minor			= 0,
+	/* 1.1: DXGDRM_DMABUF_TO_SHARED */
+	.minor			= 1,
 	.patchlevel		= 0,
 };
 

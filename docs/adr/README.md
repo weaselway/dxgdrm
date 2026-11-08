@@ -23,7 +23,7 @@ and of weaselwayd are in weaselway's `docs/adr`, and are referred to as
 | [0009](0009-uapi-extends-by-zero-extension.md) | The uapi structs grow at the end, and new fields must be zero | Accepted |
 | [0010](0010-kernel-tree-out-of-the-closure.md) | The kernel tree stays out of the module's runtime closure | Accepted |
 | [0011](0011-virtual-kms-display.md) | A virtual KMS display whose commits go to a userspace presenter | Accepted, the vblank superseded by 0019 |
-| [0012](0012-shared-handles-and-dumb-buffers.md) | Framebuffers are wrapped D3D12 shared handles or dumb buffers | Accepted |
+| [0012](0012-shared-handles-and-dumb-buffers.md) | Framebuffers are wrapped D3D12 shared handles or dumb buffers | Accepted, amended by 0021 |
 | [0013](0013-flip-waits-for-the-presenter.md) | A page flip completes when the presenter has taken the frame | Superseded by 0019 |
 | [0014](0014-presenter-ioctls-on-the-render-node.md) | The presenter's ioctls are allowed on the render node | Accepted (spike shortcut) |
 | [0015](0015-cursor-plane-behaviour.md) | Hotspot properties without `DRIVER_CURSOR_HOTSPOT`, and only new frames count | Accepted |
@@ -32,6 +32,7 @@ and of weaselwayd are in weaselway's `docs/adr`, and are referred to as
 | [0018](0018-refresh-rate-from-the-presenter.md) | The presenter sets the mode's refresh rate | Accepted |
 | [0019](0019-flips-complete-on-a-virtual-vblank.md) | Flips complete on a virtual vblank | Accepted |
 | [0020](0020-presenter-shifts-the-vblank.md) | The presenter shifts the vblank | Accepted |
+| [0021](0021-shared-handles-leave-as-dma-bufs.md) | Wrapped shared handles can leave as dma-bufs | Accepted |
 
 ## Known risks
 

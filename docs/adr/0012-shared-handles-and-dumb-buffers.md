@@ -1,6 +1,6 @@
 # 0012. Framebuffers are wrapped D3D12 shared handles or dumb buffers
 
-Status: Accepted
+Status: Accepted, amended by 0021
 
 ## Context
 
@@ -25,4 +25,6 @@ plain memory.
 - The frame never leaves GPU memory until the presenter reads it back.
 - A shared handle cannot be read by the kernel or by a process without a d3d12
   device.
-- Other DRM drivers cannot import these buffers. They are not dma-bufs.
+- Other DRM drivers cannot import these buffers. They are not dma-bufs
+  (0021 lets a wrapped one leave as a dma-buf, which other drivers still
+  cannot attach to).

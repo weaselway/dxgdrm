@@ -37,6 +37,7 @@ handful of ioctls on the render node, described in
 | `DXGDRM_SET_MODE` | Sets the size of the one mode the connector offers; a hotplug event tells the compositor. |
 | `DXGDRM_SHIFT_VBLANK` | Moves the virtual vblank in time, to line the frames up with the client's monitor. |
 | `DXGDRM_FENCE_FROM_EVENTFD` | The fence conversion above. |
+| `DXGDRM_DMABUF_TO_SHARED` | Gives the shared handle inside a dma-buf exported from a wrapped one, for an importer's `OpenSharedHandle`. |
 
 A framebuffer is one of two things:
 
@@ -44,7 +45,9 @@ A framebuffer is one of two things:
   not a dma-buf. `PRIME_FD_TO_HANDLE` on this node accepts those and wraps the
   file, so the buffer has a GEM handle to make a framebuffer from. The
   presenter gets an fd for the same shared handle and opens it on its own
-  device.
+  device. `PRIME_HANDLE_TO_FD` turns the wrapped file into a real dma-buf,
+  whose reservation object carries implicit fences
+  ([ADR 0021](docs/adr/0021-shared-handles-leave-as-dma-bufs.md)).
 - **A dumb buffer**, for the cursor plane and for anything that draws without
   the GPU.
 

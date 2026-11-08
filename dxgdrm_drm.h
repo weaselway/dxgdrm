@@ -43,6 +43,23 @@ struct drm_dxgdrm_fence_from_eventfd {
 	__u32 pad;
 };
 
+/**
+ * struct drm_dxgdrm_dmabuf_to_shared - the shared handle behind a dma-buf
+ *
+ * A D3D12 shared handle imported with DRM_IOCTL_PRIME_FD_TO_HANDLE can be
+ * exported again with DRM_IOCTL_PRIME_HANDLE_TO_FD. The result is a real
+ * dma-buf, with a reservation object that DMA_BUF_IOCTL_IMPORT_SYNC_FILE and
+ * poll() work on, but no D3D12 device can open it. This gives back an fd for
+ * the shared handle inside, for OpenSharedHandle. Fails with -EINVAL for any
+ * other dma-buf. Since driver version 1.1.
+ */
+struct drm_dxgdrm_dmabuf_to_shared {
+	/** @dmabuf_fd: a dma-buf exported by this device. Not consumed. */
+	__s32 dmabuf_fd;
+	/** @shared_fd: out, the shared handle. */
+	__s32 shared_fd;
+};
+
 /*
  * The presenter side of the virtual display.
  *
@@ -223,6 +240,7 @@ struct drm_dxgdrm_shift_vblank {
 #define DRM_DXGDRM_ACK_FRAME		0x03
 #define DRM_DXGDRM_SET_MODE		0x04
 #define DRM_DXGDRM_SHIFT_VBLANK		0x05
+#define DRM_DXGDRM_DMABUF_TO_SHARED	0x06
 
 #define DRM_IOCTL_DXGDRM_FENCE_FROM_EVENTFD				\
 	DRM_IOWR(DRM_COMMAND_BASE + DRM_DXGDRM_FENCE_FROM_EVENTFD,	\
@@ -242,6 +260,9 @@ struct drm_dxgdrm_shift_vblank {
 #define DRM_IOCTL_DXGDRM_SHIFT_VBLANK					\
 	DRM_IOW(DRM_COMMAND_BASE + DRM_DXGDRM_SHIFT_VBLANK,		\
 		struct drm_dxgdrm_shift_vblank)
+#define DRM_IOCTL_DXGDRM_DMABUF_TO_SHARED				\
+	DRM_IOWR(DRM_COMMAND_BASE + DRM_DXGDRM_DMABUF_TO_SHARED,	\
+		 struct drm_dxgdrm_dmabuf_to_shared)
 
 #if defined(__cplusplus)
 }
