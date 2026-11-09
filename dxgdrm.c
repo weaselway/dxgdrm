@@ -1258,16 +1258,28 @@ static int dxgdrm_get_frame_ioctl(struct drm_device *dev, void *data,
 
 	mutex_lock(&dxg->frame_lock);
 
+	/* Reserve the fds before the damage is consumed, so running out of
+	 * fds leaves it for the next call. */
+	if (dxg->primary_fb && to_dxgdrm_gem(dxg->primary_fb->obj[0])->shared) {
+		fd = get_unused_fd_flags(O_CLOEXEC);
+		if (fd < 0) {
+			ret = fd;
+			goto err_unlock;
+		}
+	}
+	if (dxg->cursor_fb && to_dxgdrm_gem(dxg->cursor_fb->obj[0])->shared) {
+		cursor_fd = get_unused_fd_flags(O_CLOEXEC);
+		if (cursor_fd < 0) {
+			ret = cursor_fd;
+			goto err_put_fd;
+		}
+	}
+
 	fb = dxg->primary_fb;
 	if (fb) {
 		struct dxgdrm_gem *gem = to_dxgdrm_gem(fb->obj[0]);
 
 		if (gem->shared) {
-			fd = get_unused_fd_flags(O_CLOEXEC);
-			if (fd < 0) {
-				mutex_unlock(&dxg->frame_lock);
-				return fd;
-			}
 			fd_install(fd, get_file(gem->shared));
 			args->fd = fd;
 			args->flags |= DXGDRM_FRAME_SHARED;
@@ -1299,13 +1311,6 @@ static int dxgdrm_get_frame_ioctl(struct drm_device *dev, void *data,
 
 		/* KWin renders the cursor on the GPU like any other layer. */
 		if (gem->shared) {
-			cursor_fd = get_unused_fd_flags(O_CLOEXEC);
-			if (cursor_fd < 0) {
-				mutex_unlock(&dxg->frame_lock);
-				if (fd >= 0)
-					close_fd(fd);
-				return cursor_fd;
-			}
 			fd_install(cursor_fd, get_file(gem->shared));
 			args->cursor_fd = cursor_fd;
 			args->flags |= DXGDRM_FRAME_CURSOR_SHARED;
@@ -1330,6 +1335,13 @@ static int dxgdrm_get_frame_ioctl(struct drm_device *dev, void *data,
 
 	mutex_unlock(&dxg->frame_lock);
 	return 0;
+
+err_put_fd:
+	if (fd >= 0)
+		put_unused_fd(fd);
+err_unlock:
+	mutex_unlock(&dxg->frame_lock);
+	return ret;
 }
 
 static int dxgdrm_read_pixels_ioctl(struct drm_device *dev, void *data,
