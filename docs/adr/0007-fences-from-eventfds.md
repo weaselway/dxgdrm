@@ -19,8 +19,10 @@ fence signals when the eventfd does.
 - The mechanism is the one KVM's irqfd uses: a wait queue entry on the eventfd
   through `vfs_poll()`. The eventfd is never read, because a read would
   consume the count Mesa's own waiter looks for.
-- Only the `eventfd_ctx` is held, not the file, so closing the last reference
-  wakes the fence with `EPOLLHUP`, and it signals.
+- The fence holds a reference on the eventfd file, so the caller may close its
+  fd right away. dxgkrnl keeps only the `eventfd_ctx`; without our reference
+  the last close would wake the fence with `EPOLLHUP` and signal it before the
+  GPU work is done. An earlier version held only the ctx and had this bug.
 - Each fence has its own fence context. `sync_file_merge()` and `dma_resv`
   keep only the newest fence per context, so a shared context would let a
   merged fence signal early (`44d9d4c`).

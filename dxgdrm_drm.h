@@ -10,9 +10,9 @@
  * be imported into a syncobj, and cannot be merged.
  *
  * DXGDRM_FENCE_FROM_EVENTFD closes that gap: hand it an eventfd, get back a
- * sync_file whose fence signals when the eventfd does. If the eventfd is closed
- * without being signalled, the fence signals anyway; if it isn't signalled
- * within the module's fence_timeout_ms (default 10 s), the fence signals with
+ * sync_file whose fence signals when the eventfd does. The fence keeps its own
+ * reference on the eventfd, so closing the caller's fd does not signal it. If
+ * the eventfd isn't signalled within the module's fence_timeout_ms (default 10 s), the fence signals with
  * -ETIMEDOUT.
  */
 #ifndef _DXGDRM_DRM_H_
@@ -29,7 +29,8 @@ extern "C" {
 #endif
 
 struct drm_dxgdrm_fence_from_eventfd {
-	/** @eventfd: eventfd to watch. Not consumed; the caller keeps it. */
+	/** @eventfd: eventfd to watch. Not consumed; the caller may close it
+	 * right after the call. */
 	__s32 eventfd;
 	/** @fd: out, a sync_file fd. */
 	__s32 fd;

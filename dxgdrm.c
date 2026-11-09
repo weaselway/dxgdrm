@@ -160,9 +160,10 @@ struct dxgdrm_device {
  * reads the eventfd -- a read would consume the count that Mesa's own waiter is
  * looking for -- so this only ever observes.
  *
- * The caller keeps its eventfd. This holds only the eventfd_ctx (which owns the
- * wait queue), not the file, so closing the last file reference still wakes us
- * with EPOLLHUP.
+ * The fence holds its own reference on the eventfd file, so the caller may close
+ * its fd right away. dxgkrnl keeps only the eventfd_ctx, not the file: without
+ * our reference, closing the last fd would run eventfd_release(), which wakes
+ * us with EPOLLHUP and would signal a fence whose GPU work never finished.
  *
  * Each fence gets its own fence context. They are not ordered with respect to
  * each other, and sync_file_merge()/dma_resv keep only the newest fence per
@@ -191,7 +192,7 @@ static void dxgdrm_fence_release_work(struct work_struct *work);
 struct dxgdrm_fence {
 	struct dma_fence	base;
 	spinlock_t		lock;
-	struct eventfd_ctx	*ctx;
+	struct file		*efile;
 	wait_queue_head_t	*wqh;
 	wait_queue_entry_t	wait;
 	poll_table		pt;
@@ -204,8 +205,7 @@ static void dxgdrm_fence_release(struct dma_fence *fence)
 {
 	struct dxgdrm_fence *f = container_of(fence, struct dxgdrm_fence, base);
 
-	/* remove_wait_queue(), the *_sync() calls and eventfd_ctx_put() can
-	 * all sleep, and a fence may be put from atomic context. */
+	/* remove_wait_queue(), the *_sync() calls and fput() can all sleep, and a fence may be put from atomic context. */
 	INIT_WORK(&f->release_work, dxgdrm_fence_release_work);
 	queue_work(dxgdrm_wq, &f->release_work);
 }
@@ -221,7 +221,7 @@ static void dxgdrm_fence_release_work(struct work_struct *work)
 	irq_work_sync(&f->signal_work);
 	cancel_delayed_work_sync(&f->watchdog);
 
-	eventfd_ctx_put(f->ctx);
+	fput(f->efile);
 
 	/* drm_syncobj and dma_resv look at fences under RCU. */
 	kfree_rcu(f, base.rcu);
@@ -268,10 +268,9 @@ static int dxgdrm_fence_wakeup(wait_queue_entry_t *wait, unsigned int mode,
 	struct dxgdrm_fence *f = container_of(wait, struct dxgdrm_fence, wait);
 	__poll_t flags = key_to_poll(key);
 
-	/* EPOLLHUP means the eventfd was closed without ever being signalled.
-	 * Signalling anyway is the only safe move: a fence that never signals
-	 * hangs whoever waits on it. */
-	if (flags & (EPOLLIN | EPOLLHUP))
+	/* No EPOLLHUP: that only comes from eventfd_release(), and we hold a
+	 * file reference until the fence is gone. */
+	if (flags & EPOLLIN)
 		irq_work_queue(&f->signal_work);
 
 	return 0;
@@ -314,10 +313,10 @@ static int dxgdrm_fence_from_eventfd(struct drm_device *dev, void *data,
 		fput(efile);
 		return PTR_ERR(ctx);
 	}
+	eventfd_ctx_put(ctx);
 
 	f = kzalloc(sizeof(*f), GFP_KERNEL);
 	if (!f) {
-		eventfd_ctx_put(ctx);
 		fput(efile);
 		return -ENOMEM;
 	}
@@ -326,7 +325,8 @@ static int dxgdrm_fence_from_eventfd(struct drm_device *dev, void *data,
 	 * this module's ioctl. */
 	__module_get(THIS_MODULE);
 
-	f->ctx = ctx;
+	/* Our efile reference now belongs to the fence. */
+	f->efile = efile;
 	spin_lock_init(&f->lock);
 	dma_fence_init(&f->base, &dxgdrm_fence_ops, &f->lock,
 		       dma_fence_context_alloc(1), 1);
@@ -337,10 +337,8 @@ static int dxgdrm_fence_from_eventfd(struct drm_device *dev, void *data,
 	init_poll_funcptr(&f->pt, dxgdrm_fence_queue_proc);
 
 	/* Queues f->wait on the eventfd's wait queue as a side effect, and
-	 * reports whether it is signalled already. The wait queue lives in
-	 * the ctx, so the file reference isn't needed after this. */
+	 * reports whether it is signalled already. */
 	events = vfs_poll(efile, &f->pt);
-	fput(efile);
 
 	sync_file = sync_file_create(&f->base);
 	if (!sync_file) {
