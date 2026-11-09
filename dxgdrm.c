@@ -56,6 +56,7 @@
 #include <linux/fdtable.h>
 #include <linux/file.h>
 #include <linux/irq_work.h>
+#include <linux/magic.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/poll.h>
@@ -514,16 +515,24 @@ out:
  * A compositor makes a framebuffer by exporting its buffer and importing the
  * fd here (KWin does exactly that; mutter asks gbm for the handle, and Mesa
  * does the import on its behalf). With d3d12 that fd is a shared handle from
- * dxgkrnl, which dma_buf_get() rejects. There is nothing in the file we could
- * check either -- dxgkrnl exports no way to identify its files -- so any fd
- * that is not a dma-buf is taken on trust and merely kept alive. The presenter
- * finds out whether it is one when it tries to open it.
+ * dxgkrnl, which dma_buf_get() rejects. dxgkrnl exports no symbol to identify
+ * its files, but they are anon_inode files named "dxgresource" (get_object_fd()
+ * in drivers/hv/dxgkrnl/ioctl.c), and only those are accepted. Taking any file
+ * would let a client wrap something that holds a reference back to us, such as
+ * its own fd of this device, and the pair would never be freed. The presenter
+ * still finds out whether the resource opens when it tries.
  *
  * Every import makes a new object and handle. That is deliberate: a compositor
  * closes the handle once it has its framebuffer, and with core PRIME's
  * one-handle-per-buffer rule that would close Mesa's handle for the same
  * buffer along with it.
  */
+static bool dxgdrm_is_shared_resource(struct file *file)
+{
+	return file->f_path.mnt->mnt_sb->s_magic == ANON_INODE_FS_MAGIC &&
+	       !strcmp(file->f_path.dentry->d_name.name, "dxgresource");
+}
+
 static int dxgdrm_prime_fd_to_handle(struct drm_device *dev,
 				     struct drm_file *file_priv, int prime_fd,
 				     uint32_t *handle)
@@ -543,6 +552,10 @@ static int dxgdrm_prime_fd_to_handle(struct drm_device *dev,
 	shared = fget(prime_fd);
 	if (!shared)
 		return -EBADF;
+	if (!dxgdrm_is_shared_resource(shared)) {
+		fput(shared);
+		return -EINVAL;
+	}
 
 	gem = dxgdrm_gem_create(dev, DXGDRM_SHARED_SIZE);
 	if (!gem) {

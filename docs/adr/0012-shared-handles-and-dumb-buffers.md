@@ -12,7 +12,10 @@ plain memory.
 ## Decision
 
 - `PRIME_FD_TO_HANDLE` on this node accepts a D3D12 shared handle and wraps the
-  file in a GEM object. The kernel never looks into it.
+  file in a GEM object. The kernel never looks into it. It only checks that
+  the file is one of dxgkrnl's shared resources (an anon_inode file named
+  `dxgresource`); any other fd gets `-EINVAL`, so a client cannot wrap a file
+  that holds a reference back to the device, such as its own fd of it.
 - `DXGDRM_GET_FRAME` gives the presenter an fd for the same shared handle,
   which it opens on its own d3d12 device.
 - Dumb buffers are vmalloc memory, mmap-able, and read with
