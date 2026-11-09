@@ -118,7 +118,9 @@ struct dxgdrm_device {
 	struct drm_dxgdrm_rect damage[DXGDRM_MAX_DAMAGE_RECTS];
 	unsigned int num_damage;
 	bool damage_full;
-	/* A client holds DRM master, see DXGDRM_FRAME_OWNED. */
+	/* A client holds DRM master, and @owned once it has committed to the
+	 * primary plane, see DXGDRM_FRAME_OWNED. Under frame_lock. */
+	bool master;
 	bool owned;
 
 	/* The size and refresh rate of the one mode the connector offers, see
@@ -722,6 +724,13 @@ static void dxgdrm_primary_atomic_update(struct drm_plane *plane,
 	 * DRM_IOCTL_MODE_DIRTYFB, which this driver does not implement (the
 	 * framebuffers have no .dirty); neither mutter nor KWin uses it. */
 	mutex_lock(&dxg->frame_lock);
+	if (dxg->master && !dxg->owned) {
+		/* The master's first commit, maybe of the frame it left up
+		 * before a VT switch: the presenter has to hear of it. */
+		dxg->owned = true;
+		dxg->seq++;
+		wake_up_interruptible_all(&dxg->frame_wq);
+	}
 	if (fb && fb == dxg->primary_fb &&
 	    !drm_plane_get_damage_clips_count(new_state)) {
 		mutex_unlock(&dxg->frame_lock);
@@ -1139,28 +1148,37 @@ static int dxgdrm_modeset_init(struct dxgdrm_device *dxg)
 
 /* Called by drm core with the master mutex held, whenever a client takes or
  * loses control of the display: on open and close, on DRM_IOCTL_SET_MASTER and
- * DROP_MASTER (logind does those on a VT switch). */
-static void dxgdrm_set_owned(struct drm_device *dev, bool owned)
+ * DROP_MASTER (logind does those on a VT switch).
+ *
+ * Taking master is not enough to own the display: the first process to open
+ * the card node becomes master, and with no compositor running that may be
+ * anything that only probes the device. The display is owned from the master's
+ * first primary plane commit, see dxgdrm_primary_atomic_update(). */
+static void dxgdrm_master_set(struct drm_device *dev, struct drm_file *file,
+			      bool from_open)
 {
 	struct dxgdrm_device *dxg = to_dxgdrm(dev);
 
 	mutex_lock(&dxg->frame_lock);
-	dxg->owned = owned;
-	dxg->seq++;
+	dxg->master = true;
 	mutex_unlock(&dxg->frame_lock);
-
-	wake_up_interruptible_all(&dxg->frame_wq);
-}
-
-static void dxgdrm_master_set(struct drm_device *dev, struct drm_file *file,
-			      bool from_open)
-{
-	dxgdrm_set_owned(dev, true);
 }
 
 static void dxgdrm_master_drop(struct drm_device *dev, struct drm_file *file)
 {
-	dxgdrm_set_owned(dev, false);
+	struct dxgdrm_device *dxg = to_dxgdrm(dev);
+	bool was_owned;
+
+	mutex_lock(&dxg->frame_lock);
+	was_owned = dxg->owned;
+	dxg->master = false;
+	dxg->owned = false;
+	if (was_owned)
+		dxg->seq++;
+	mutex_unlock(&dxg->frame_lock);
+
+	if (was_owned)
+		wake_up_interruptible_all(&dxg->frame_wq);
 }
 
 /*

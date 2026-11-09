@@ -93,7 +93,9 @@ struct drm_dxgdrm_dmabuf_to_shared {
  * buffer, to be read with DXGDRM_READ_PIXELS. */
 #define DXGDRM_FRAME_CURSOR_SHARED	(1 << 5)
 /*
- * A compositor controls the display (it holds DRM master). Without this flag
+ * A compositor controls the display: it holds DRM master and has committed to
+ * the primary plane since it took it. Holding master alone is not enough, since
+ * whatever opens the card node first gets it, a probe too. Without this flag
  * the planes may still have framebuffers: a compositor leaves its last frame
  * up when it exits, as on real hardware, so that the next one can take over
  * without a black frame in between. It is then nobody's frame, and stays until
