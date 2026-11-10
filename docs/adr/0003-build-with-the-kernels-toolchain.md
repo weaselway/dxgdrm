@@ -20,7 +20,7 @@ like that.
   kernel.org crosstool gcc 13.2.0 (`3ebd9f7`). The flake also uses its
   binutils 2.41 (`f9642ec`); `build-kernel-headers.sh` takes only `CC` from
   it. The download is pinned by SHA256.
-- `build-kernel-headers.sh` (and `packages.wsl-kernel-dev` in the flake)
+- `build-kernel-headers.sh` (and the kernel trees from wsl-kernel, see 0022)
   fetches the `microsoft/WSL2-Linux-Kernel` tag of the release, builds
   `vmlinux` and `modules_prepare` with that compiler, and checks
   `kernel.release`.

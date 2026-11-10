@@ -33,6 +33,7 @@ and of weaselwayd are in weaselway's `docs/adr`, and are referred to as
 | [0019](0019-flips-complete-on-a-virtual-vblank.md) | Flips complete on a virtual vblank | Accepted |
 | [0020](0020-presenter-shifts-the-vblank.md) | The presenter shifts the vblank | Accepted |
 | [0021](0021-shared-handles-leave-as-dma-bufs.md) | Wrapped shared handles can leave as dma-bufs | Accepted |
+| [0022](0022-kernel-trees-from-wsl-kernel.md) | Kernel trees come from wsl-kernel, with a pinned nixpkgs | Accepted |
 
 ## Known risks
 

@@ -18,7 +18,29 @@
     },
     "root": {
       "inputs": {
+        "nixpkgs": [
+          "wsl-kernel",
+          "nixpkgs"
+        ],
+        "wsl-kernel": "wsl-kernel"
+      }
+    },
+    "wsl-kernel": {
+      "inputs": {
         "nixpkgs": "nixpkgs"
+      },
+      "locked": {
+        "lastModified": 1794299984,
+        "narHash": "sha256-Rc65J1ZD/SYgPPw7aSJV/OjSqR5Fwr1s8D7Ch2QPC4Y=",
+        "owner": "weaselway",
+        "repo": "wsl-kernel",
+        "rev": "c7ffb91f2b33f34b1d908735d6eee47c5084d6d8",
+        "type": "github"
+      },
+      "original": {
+        "owner": "weaselway",
+        "repo": "wsl-kernel",
+        "type": "github"
       }
     }
   },

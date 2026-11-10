@@ -16,3 +16,6 @@
 
 # build-kernel-headers.sh output (kernel tree, toolchain).
 /build/
+
+# wsl-kernel checkout of the CI workflow (configs for the container build).
+/wsl-kernel/

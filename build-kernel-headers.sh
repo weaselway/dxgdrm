@@ -21,9 +21,10 @@ KERNEL_REPO=https://github.com/microsoft/WSL2-Linux-Kernel.git
 # Which kernel to build against. On WSL that is the running one, and its config
 # comes from the source tree. Off WSL -- CI, or any machine not running the
 # target kernel -- uname -r says nothing useful, so point KERNEL_CONFIG at one
-# of the captured configs in ./conf instead:
+# of the captured configs in wsl-kernel's conf/ (cloned to ./wsl-kernel,
+# inside the repo, so docker-env.sh mounts it too):
 #
-#   KERNEL_CONFIG=conf/kernel-6.18.54.1-microsoft-standard-WSL2.conf \
+#   KERNEL_CONFIG=wsl-kernel/conf/kernel-6.18.54.1-microsoft-standard-WSL2.conf \
 #     ./build-kernel-headers.sh
 #
 # Those are named for the release they were captured from, which is where the

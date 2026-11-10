@@ -1,10 +1,11 @@
-# Builds dxgdrm.ko for the WSL2 kernels captured in ./conf.
+# Builds dxgdrm.ko for the WSL2 kernels captured in wsl-kernel's conf/, at
+# the revision flake.lock pins.
 #
 # The runner is not WSL, so `uname -r` is useless here and the config cannot
 # come from the running kernel -- each conf/kernel-<release>.conf names the
 # release it was captured from, and build-kernel-headers.sh takes both from it
-# via KERNEL_CONFIG. Adding a config to ./conf adds a matrix leg; nothing here
-# hardcodes a kernel version.
+# via KERNEL_CONFIG. Adding a config to wsl-kernel adds a matrix leg once the
+# lock is updated; nothing here hardcodes a kernel version.
 name: build
 
 # Pushes to main, and pull requests -- not every push too, which ran a PR's
@@ -29,9 +30,19 @@ jobs:
       matrix: ${{ steps.list.outputs.matrix }}
     steps:
       - uses: actions/checkout@v7
+
+      - id: wsl-kernel
+        run: echo "rev=$(jq -r '.nodes["wsl-kernel"].locked.rev' flake.lock)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v7
+        with:
+          repository: weaselway/wsl-kernel
+          ref: ${{ steps.wsl-kernel.outputs.rev }}
+          path: wsl-kernel
+
       - id: list
         run: |
-          matrix="$(ls conf/kernel-*.conf | jq -Rrc '[., inputs] | {config: .}')"
+          matrix="$(ls wsl-kernel/conf/kernel-*.conf | jq -Rrc '[., inputs] | {config: .}')"
           echo "matrix=${matrix}" >> "$GITHUB_OUTPUT"
 
   build:
@@ -42,6 +53,15 @@ jobs:
       matrix: ${{ fromJson(needs.configs.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v7
+
+      - id: wsl-kernel
+        run: echo "rev=$(jq -r '.nodes["wsl-kernel"].locked.rev' flake.lock)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v7
+        with:
+          repository: weaselway/wsl-kernel
+          ref: ${{ steps.wsl-kernel.outputs.rev }}
+          path: wsl-kernel
 
       - name: Derive the target release from the config name
         id: kernel

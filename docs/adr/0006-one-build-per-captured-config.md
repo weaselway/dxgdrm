@@ -1,6 +1,7 @@
 # 0006. One build per captured kernel config, keyed on the release
 
-Status: Accepted
+Status: Accepted. The configs, `kernels` and `add-kernel.sh` moved to
+wsl-kernel (0022).
 
 ## Context
 
@@ -28,12 +29,13 @@ the release string, and the old module is rejected. CI runners are not WSL, so
 ## Consequences
 
 - Adding a kernel means adding its config to `conf/` and its hash to
-  `kernels`. Nothing else names a kernel version. `add-kernel.sh` does both,
-  taking the config from the tag's in-tree `config-wsl`, whose values match
-  the shipped kernel's.
+  `kernels`. Nothing else names a kernel version. wsl-kernel's
+  `add-kernel.sh` does both, from `/proc/config.gz` when run on that kernel,
+  else from the tag's in-tree `config-wsl`, which can lack modules the
+  shipped kernel has.
 - The loader picks the module matching `uname -r`, and a kernel without a
   build is a missing file, not a vermagic error.
-- Supported today: `6.18.40.1` and `6.18.54.1`
+- Supported today: `6.18.40.1`, `6.18.54.1` and `6.18.58.1`
   (`-microsoft-standard-WSL2`), x86_64 only. `6.18.33.2` was dropped: it has
   no DRM vblank timer helpers (`drm_vblank_helper.h`), which 0019 needs. A custom kernel set with
   `kernel=` in `.wslconfig` is not covered.
