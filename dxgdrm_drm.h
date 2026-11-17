@@ -64,22 +64,32 @@ struct drm_dxgdrm_dmabuf_to_shared {
 /*
  * The presenter side of the virtual display.
  *
- * dxgdrm has one CRTC with a primary and a cursor plane and nothing behind
- * them. Whatever the compositor commits is handed to a userspace presenter
- * through the ioctls below (GET_FRAME, READ_PIXELS, ACK_FRAME, SET_MODE,
- * SHIFT_VBLANK),
- * which is what reads the frame back and gets it to Windows.
+ * dxgdrm has DXGDRM_MAX_OUTPUTS outputs, each a CRTC with a primary and a
+ * cursor plane, an encoder and a connector, and nothing behind them. Output 0
+ * is connected from the start; the others are disconnected until a presenter
+ * connects them with DXGDRM_SET_MODE. Whatever the compositor commits is
+ * handed to a userspace presenter through the ioctls below (GET_FRAME,
+ * READ_PIXELS, ACK_FRAME, SET_MODE, SHIFT_VBLANK), which is what reads the
+ * frame back and gets it to Windows. Each of them takes the output it is
+ * about; an output out of range is -EINVAL.
  *
  * A primary framebuffer is one of two things. A d3d12 buffer is a D3D12 shared
  * handle that the compositor imported with DRM_IOCTL_PRIME_FD_TO_HANDLE (the
  * node accepts those although they are not dma-bufs); the presenter gets an fd
  * for the same shared handle and opens it on its own device. A dumb buffer is
  * plain memory and is read with DXGDRM_READ_PIXELS.
+ *
+ * These structs change together with weaselwayd, the one presenter; there is
+ * no compatibility with older layouts.
  */
 
+#define DXGDRM_MAX_OUTPUTS		4
 #define DXGDRM_MAX_DAMAGE_RECTS		16
 
-/* The primary plane has a framebuffer. */
+/* In: return -EAGAIN at once if there is nothing new. */
+#define DXGDRM_GET_FRAME_NOWAIT		(1 << 0)
+
+/* Out: the primary plane has a framebuffer. */
 #define DXGDRM_FRAME_PRIMARY		(1 << 0)
 /* It is a D3D12 shared handle, and @fd is valid. */
 #define DXGDRM_FRAME_SHARED		(1 << 1)
@@ -94,12 +104,13 @@ struct drm_dxgdrm_dmabuf_to_shared {
 #define DXGDRM_FRAME_CURSOR_SHARED	(1 << 5)
 /*
  * A compositor controls the display: it holds DRM master and has committed to
- * the primary plane since it took it. Holding master alone is not enough, since
+ * a primary plane since it took it. Holding master alone is not enough, since
  * whatever opens the card node first gets it, a probe too. Without this flag
  * the planes may still have framebuffers: a compositor leaves its last frame
  * up when it exits, as on real hardware, so that the next one can take over
  * without a black frame in between. It is then nobody's frame, and stays until
- * someone commits again. The flag changing bumps @seq like a commit does.
+ * someone commits again. The flag is the same on every output; it changing
+ * bumps @seq of every output like a commit does.
  */
 #define DXGDRM_FRAME_OWNED		(1 << 6)
 
@@ -109,23 +120,29 @@ struct drm_dxgdrm_rect {
 
 struct drm_dxgdrm_get_frame {
 	/**
-	 * @seq: in, the sequence number the caller has already seen (0 at
-	 * first); out, the current one. The call blocks until they differ.
-	 * Every commit that touches either plane bumps it.
+	 * @seq: in, the sequence number of @output the caller has already
+	 * seen (0 at first); out, the current one. The call blocks until
+	 * they differ. Every commit that touches either plane of the output
+	 * bumps it.
 	 *
-	 * After the first call the file also polls readable (POLLIN) while
-	 * the current number differs from the one this call last returned,
-	 * so a presenter can wait in poll() and then fetch without blocking.
+	 * After the first call for an output the file also polls readable
+	 * (POLLIN) while that output's number differs from the one this call
+	 * last returned for it, so a presenter can wait in poll() and then
+	 * fetch each output with DXGDRM_GET_FRAME_NOWAIT.
 	 */
 	__u64 seq;
+	/** @output: in, 0 to DXGDRM_MAX_OUTPUTS - 1. */
+	__u32 output;
 	/** @timeout_ms: in, give up with -ETIME after this long; 0 waits forever. */
 	__u32 timeout_ms;
-	/** @flags: out, DXGDRM_FRAME_*. */
+	/** @flags: in, DXGDRM_GET_FRAME_*; out, DXGDRM_FRAME_*. */
 	__u32 flags;
+	__u32 pad0;
 
 	/**
 	 * @buffer_id: out, identifies the buffer behind the primary plane for
-	 * as long as it exists, so the presenter can cache its import.
+	 * as long as it exists, so the presenter can cache its import. Unique
+	 * across outputs.
 	 */
 	__u64 buffer_id;
 	/** @primary_seq: out, bumped when the primary plane's content changes. */
@@ -172,10 +189,13 @@ struct drm_dxgdrm_get_frame {
 #define DXGDRM_PLANE_CURSOR	1
 
 struct drm_dxgdrm_read_pixels {
+	/** @output: in, 0 to DXGDRM_MAX_OUTPUTS - 1. */
+	__u32 output;
 	/** @plane: DXGDRM_PLANE_*. Its framebuffer must be a dumb buffer. */
 	__u32 plane;
 	/** @size: bytes available at @data. */
 	__u32 size;
+	__u32 pad;
 	/** @data: user pointer the pixels are copied to, pitch * height bytes. */
 	__u64 data;
 	/* out */
@@ -188,44 +208,63 @@ struct drm_dxgdrm_read_pixels {
 /**
  * struct drm_dxgdrm_ack_frame - the presenter has taken a frame
  *
- * While a presenter is attached (a file that has called DXGDRM_GET_FRAME is
- * open), the page flip that brought a new frame completes only when this is
- * called with that frame's primary_seq or a later one, or after the module's
- * flip_timeout_ms (default 100). The compositor does not start its next frame
- * before that, which is how it is held to the presenter's pace.
+ * While a presenter is attached to an output (a file that has called
+ * DXGDRM_GET_FRAME for it is open), the page flip that brought a new frame to
+ * that output completes only when this is called with that frame's
+ * primary_seq or a later one, or after the module's flip_timeout_ms (default
+ * 100). The compositor does not start its next frame for that output before
+ * that, which is how it is held to the presenter's pace.
  *
  * "Taken" means the readback has been issued, not that it has finished: the
  * buffer is not rendered to again before the flip after the next one, and the
  * presenter acknowledges the next one only once this readback is done.
  */
 struct drm_dxgdrm_ack_frame {
-	/** @primary_seq: in, as DXGDRM_GET_FRAME returned it. */
+	/** @primary_seq: in, as DXGDRM_GET_FRAME returned it for @output. */
 	__u64 primary_seq;
+	/** @output: in, 0 to DXGDRM_MAX_OUTPUTS - 1. */
+	__u32 output;
+	__u32 pad;
 };
 
+/* The output is connected. Without it, the other fields are ignored. */
+#define DXGDRM_MODE_CONNECTED		(1 << 0)
+
 /**
- * struct drm_dxgdrm_set_mode - set the size of the virtual display
+ * struct drm_dxgdrm_set_mode - connect, disconnect or resize an output
  *
- * The connector then offers exactly one mode, of this size, and a hotplug
- * event tells the compositor to look. It is the compositor that switches;
- * the presenter sees the new size in the frames that follow.
+ * A connected output's connector offers exactly one mode, of this size, and a
+ * hotplug event tells the compositor to look. It is the compositor that
+ * switches; the presenter sees the new size in the frames that follow.
  */
 struct drm_dxgdrm_set_mode {
+	/** @output: in, 0 to DXGDRM_MAX_OUTPUTS - 1. */
+	__u32 output;
+	/** @flags: in, DXGDRM_MODE_*. */
+	__u32 flags;
 	__u32 width;
 	__u32 height;
 	/**
 	 * @refresh_mhz: the mode's refresh rate in millihertz, 1 to 1000 Hz;
-	 * 0 for the module's refresh parameter. Added after the first
-	 * release; DRM zero-extends shorter structs, so callers built against
-	 * the 8-byte version get the default. The compositor's frame clock
+	 * 0 for the module's refresh parameter. The compositor's frame clock
 	 * runs at this rate; frames are still held to the presenter's pace by
 	 * DXGDRM_ACK_FRAME.
 	 */
 	__u32 refresh_mhz;
+	/**
+	 * @x: the connector's "suggested X" and "suggested Y" properties,
+	 * where the output sits in the client's layout. Compositors that
+	 * follow hotplug_mode_update (mutter) place it there.
+	 */
+	__u32 x;
+	__u32 y;
+	/** @width_mm: the physical size, 0 if unknown. */
+	__u32 width_mm;
+	__u32 height_mm;
 };
 
 /**
- * struct drm_dxgdrm_shift_vblank - move the virtual vblank in time
+ * struct drm_dxgdrm_shift_vblank - move an output's virtual vblank in time
  *
  * Moves the vblank by @shift_ns, later if positive. A presenter uses it to
  * line the compositor's frames up with the client's monitor. The vblank moves
@@ -235,6 +274,9 @@ struct drm_dxgdrm_set_mode {
 struct drm_dxgdrm_shift_vblank {
 	/** @shift_ns: in, -1 s to 1 s. */
 	__s64 shift_ns;
+	/** @output: in, 0 to DXGDRM_MAX_OUTPUTS - 1. */
+	__u32 output;
+	__u32 pad;
 };
 
 #define DRM_DXGDRM_FENCE_FROM_EVENTFD	0x00
