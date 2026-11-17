@@ -13,8 +13,10 @@ can move the vblank.
 
 ## Decision
 
-- `DXGDRM_SHIFT_VBLANK` moves the vblank by a signed number of nanoseconds,
-  up to 1 s. A later call replaces what is not applied yet.
+- `DXGDRM_SHIFT_VBLANK` moves an output's vblank by a signed number of
+  nanoseconds, up to 1 s. A later call replaces what is not applied yet.
+  Each output has its own phase, since each viewer window can be on its own
+  monitor.
 - The vblank timer's `handle_vblank_timeout` hook moves the next expiry by at
   most a quarter of a frame per vblank. The vblank core counts vblanks from
   timestamps, and a tick that moves by less than half a frame is still one

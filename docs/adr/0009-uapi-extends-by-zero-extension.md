@@ -18,5 +18,6 @@ room to extend it.
 ## Consequences
 
 - A later option can be a flag, without a new ioctl.
-- The same rule applies to the presenter ioctls: fields are added at the end,
-  and zero means the old behaviour.
+- The presenter ioctls are not covered by this rule. weaselwayd is their only
+  user and moves with the driver, so their structs change without
+  compatibility (see 0023).

@@ -34,6 +34,7 @@ and of weaselwayd are in weaselway's `docs/adr`, and are referred to as
 | [0020](0020-presenter-shifts-the-vblank.md) | The presenter shifts the vblank | Accepted |
 | [0021](0021-shared-handles-leave-as-dma-bufs.md) | Wrapped shared handles can leave as dma-bufs | Accepted |
 | [0022](0022-kernel-trees-from-wsl-kernel.md) | Kernel trees come from wsl-kernel, with a pinned nixpkgs | Accepted |
+| [0023](0023-fixed-set-of-outputs.md) | A fixed set of outputs, connected by the presenter | Accepted |
 
 ## Known risks
 

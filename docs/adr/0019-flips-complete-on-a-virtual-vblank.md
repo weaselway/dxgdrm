@@ -17,10 +17,10 @@ a warning.
 
 ## Decision
 
-- The CRTC has a vblank: `drm_vblank_init()` and DRM's vblank timer
-  (`DRM_CRTC_VBLANK_TIMER_FUNCS`), an hrtimer at the rate of the mode, which
-  the presenter sets (see 0018). It runs while someone holds a vblank
-  reference, and stops after DRM's idle delay.
+- Each CRTC has a vblank: `drm_vblank_init()` and DRM's vblank timer
+  (`DRM_CRTC_VBLANK_TIMER_FUNCS`), an hrtimer at the rate of its output's
+  mode, which the presenter sets (see 0018). It runs while someone holds a
+  vblank reference, and stops after DRM's idle delay.
 - Every flip completes on a vblank, with that vblank's count and time:
   - a flip that brings a new frame on the first vblank after the presenter has
     acknowledged it, or after `flip_timeout_ms`;
