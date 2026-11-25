@@ -35,7 +35,7 @@ the release string, and the old module is rejected. CI runners are not WSL, so
   shipped kernel has.
 - The loader picks the module matching `uname -r`, and a kernel without a
   build is a missing file, not a vermagic error.
-- Supported today: `6.18.40.1`, `6.18.54.1` and `6.18.58.1`
+- Supported today: `6.18.40.1`, `6.18.54.1`, `6.18.58.1` and `6.18.64.1`
   (`-microsoft-standard-WSL2`), x86_64 only. `6.18.33.2` was dropped: it has
   no DRM vblank timer helpers (`drm_vblank_helper.h`), which 0019 needs. A custom kernel set with
   `kernel=` in `.wslconfig` is not covered.
